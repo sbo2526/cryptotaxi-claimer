@@ -1,0 +1,24 @@
+{
+  "enabled": true,
+  "main_account": "bavafasobhan@gmail.com",
+  "trigger_count": 100,
+  "status": "dormant",
+  "phase_label": "⏳ در انتظار 100 رفرال اصلی — الان 52",
+  "started_at": 1795366057.2503822,
+  "started_at_persian": "۱۴۰۵/اسفند/۱۶ شنبه ۲۰:۱۷:۳۷",
+  "updated_at": 1795366057.8045332,
+  "updated_at_persian": "۱۴۰۵/اسفند/۱۶ شنبه ۲۰:۱۷:۳۷",
+  "current_referral_count": 52,
+  "referral_stats": {
+    "total": 52,
+    "completed": 22,
+    "inProgress": 30,
+    "tripsEarned": 66,
+    "tripsUsed": 16,
+    "deposited": 0,
+    "commission": 0
+  },
+  "triggered": false,
+  "check_time": 1795366057.804319,
+  "check_time_persian": "۱۴۰۵/اسفند/۱۶ شنبه ۲۰:۱۷:۳۷"
+}

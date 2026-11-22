@@ -1,0 +1,40 @@
+# ── Crypto Taxi — .gitignore ────────────────────────────────────────────────
+# Logs
+*.log
+*.log.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Data files (runtime state — not needed in repo)
+# accounts.json — will be recreated by account_creator
+# status.json — live runtime state
+# earnings.json — runtime earnings
+# banned_accounts.json — runtime BAN tracking
+# creator_status.json — live creator status
+# referral_faker_status.json — live referral faker status
+# email_account.json — local email config
+
+# System files
+*.service
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Reports (generated daily)
+reports/
+
+# WPF project (not needed for Railway deployment)
+CryptoTaxiWPF/

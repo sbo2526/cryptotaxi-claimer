@@ -1,0 +1,16 @@
+# Proxy list for Crypto Taxi Claimer
+# One proxy per line. Format: scheme://host:port
+# Supports user:pass@host:port format.
+# Empty lines and lines starting with # are ignored.
+#
+# Examples:
+#   http://1.2.3.4:8080
+#   https://user:pass@5.6.7.8:9090
+#   socks5://9.10.11.12:1080
+#
+# Leave empty (or comment out all lines) to run direct (no proxy).
+#
+# Health checking: dead proxies are auto-skipped and re-tested every 10 min.
+# If ALL proxies are dead, claimer falls back to direct connection automatically.
+
+# Paste your proxies below (one per line):

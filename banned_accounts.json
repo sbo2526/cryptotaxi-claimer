@@ -1,0 +1,634 @@
+{
+  "banned": [
+    {
+      "username": "cixhxf2s@anonaddy.me",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:35"
+    },
+    {
+      "username": "cixhxf2s@anonaddy.me",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:35"
+    },
+    {
+      "username": "yrhye83k@anonaddy.me",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:35"
+    },
+    {
+      "username": "yrhye83k@anonaddy.me",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:35"
+    },
+    {
+      "username": "17vx4mmj@anonaddy.me",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:35"
+    },
+    {
+      "username": "17vx4mmj@anonaddy.me",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:35"
+    },
+    {
+      "username": "dueik5p3@anonaddy.me",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:37"
+    },
+    {
+      "username": "dueik5p3@anonaddy.me",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:37"
+    },
+    {
+      "username": "51srgg7b@anonaddy.me",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:37"
+    },
+    {
+      "username": "51srgg7b@anonaddy.me",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:37"
+    },
+    {
+      "username": "ms1p9ufh@anonaddy.me",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:37"
+    },
+    {
+      "username": "ms1p9ufh@anonaddy.me",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:37"
+    },
+    {
+      "username": "txrgo9ep@anonaddy.me",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:38"
+    },
+    {
+      "username": "txrgo9ep@anonaddy.me",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:38"
+    },
+    {
+      "username": "ux2sz093@anonaddy.me",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:38"
+    },
+    {
+      "username": "ux2sz093@anonaddy.me",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:39"
+    },
+    {
+      "username": "k7rgb85u@anonaddy.me",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:39"
+    },
+    {
+      "username": "k7rgb85u@anonaddy.me",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:39"
+    },
+    {
+      "username": "cabuu5o@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:40"
+    },
+    {
+      "username": "cabuu5o@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:40"
+    },
+    {
+      "username": "crypto5343659@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:40"
+    },
+    {
+      "username": "crypto5343659@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:40"
+    },
+    {
+      "username": "uber25h5p@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:41"
+    },
+    {
+      "username": "uber25h5p@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:41"
+    },
+    {
+      "username": "cabtimgr@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:41"
+    },
+    {
+      "username": "cabtimgr@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 2,
+      "detected_at": "2026-11-22 21:11:41"
+    },
+    {
+      "username": "uberfxqah@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:42"
+    },
+    {
+      "username": "uberfxqah@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:42"
+    },
+    {
+      "username": "rideyiahh5kc@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:42"
+    },
+    {
+      "username": "rideyiahh5kc@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:42"
+    },
+    {
+      "username": "cab1uh5@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:42"
+    },
+    {
+      "username": "cab1uh5@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:42"
+    },
+    {
+      "username": "taxi86wx1w2j@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:42"
+    },
+    {
+      "username": "taxi86wx1w2j@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:43"
+    },
+    {
+      "username": "taxi3oye@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:43"
+    },
+    {
+      "username": "taxi3oye@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:43"
+    },
+    {
+      "username": "cityx7e9my@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:43"
+    },
+    {
+      "username": "cityx7e9my@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:43"
+    },
+    {
+      "username": "cryptoswsa@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:44"
+    },
+    {
+      "username": "cryptoswsa@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:44"
+    },
+    {
+      "username": "ridesnk857@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:44"
+    },
+    {
+      "username": "ridesnk857@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:44"
+    },
+    {
+      "username": "cabwztoy@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:45"
+    },
+    {
+      "username": "cabwztoy@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:45"
+    },
+    {
+      "username": "crypto8r4aldi@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:45"
+    },
+    {
+      "username": "crypto8r4aldi@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:45"
+    },
+    {
+      "username": "taxihq2e@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:46"
+    },
+    {
+      "username": "taxihq2e@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:46"
+    },
+    {
+      "username": "cabg0vs0@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:47"
+    },
+    {
+      "username": "cabg0vs0@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:47"
+    },
+    {
+      "username": "ridehucfuo97@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:47"
+    },
+    {
+      "username": "ridehucfuo97@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:47"
+    },
+    {
+      "username": "taxiv0poy823@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:47"
+    },
+    {
+      "username": "taxiv0poy823@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:47"
+    },
+    {
+      "username": "cabpkynlq@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:48"
+    },
+    {
+      "username": "cabpkynlq@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:48"
+    },
+    {
+      "username": "cityx1my2v@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:48"
+    },
+    {
+      "username": "cityx1my2v@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:48"
+    },
+    {
+      "username": "crypto3apkkbum@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:49"
+    },
+    {
+      "username": "crypto3apkkbum@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:49"
+    },
+    {
+      "username": "crypto5on24o@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:49"
+    },
+    {
+      "username": "crypto5on24o@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:49"
+    },
+    {
+      "username": "cityd10d@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:50"
+    },
+    {
+      "username": "cityd10d@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:50"
+    },
+    {
+      "username": "ride8c4r@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:50"
+    },
+    {
+      "username": "ride8c4r@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:50"
+    },
+    {
+      "username": "citylyzouaw@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:51"
+    },
+    {
+      "username": "citylyzouaw@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:51"
+    },
+    {
+      "username": "cabcjd0n2@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:51"
+    },
+    {
+      "username": "cabcjd0n2@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:51"
+    },
+    {
+      "username": "citybvzjq1@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:51"
+    },
+    {
+      "username": "citybvzjq1@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:52"
+    },
+    {
+      "username": "crypto8wmylk@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:52"
+    },
+    {
+      "username": "crypto8wmylk@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:52"
+    },
+    {
+      "username": "cabi4hyvs@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:53"
+    },
+    {
+      "username": "cabi4hyvs@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:53"
+    },
+    {
+      "username": "crypto9yqod@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:53"
+    },
+    {
+      "username": "crypto9yqod@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:53"
+    },
+    {
+      "username": "taximnzylrp@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:53"
+    },
+    {
+      "username": "cabdj6h@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:54"
+    },
+    {
+      "username": "cabdj6h@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:54"
+    },
+    {
+      "username": "cabrzu4zi@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:54"
+    },
+    {
+      "username": "cabrzu4zi@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:54"
+    },
+    {
+      "username": "taxi3aaa6@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:55"
+    },
+    {
+      "username": "taxi3aaa6@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:55"
+    },
+    {
+      "username": "cityzkpff5t@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:56"
+    },
+    {
+      "username": "cityzkpff5t@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:56"
+    },
+    {
+      "username": "ubereppkxn@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:56"
+    },
+    {
+      "username": "ubereppkxn@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:56"
+    },
+    {
+      "username": "cryptov5t0p6@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:56"
+    },
+    {
+      "username": "cryptov5t0p6@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:56"
+    },
+    {
+      "username": "uberaqu3a@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:57"
+    },
+    {
+      "username": "uberaqu3a@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:57"
+    },
+    {
+      "username": "taxiqsk5g@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:57"
+    },
+    {
+      "username": "taxiqsk5g@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:57"
+    },
+    {
+      "username": "city87hn5@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:57"
+    },
+    {
+      "username": "city87hn5@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:57"
+    },
+    {
+      "username": "cryptojmqei4@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:58"
+    },
+    {
+      "username": "cryptojmqei4@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:58"
+    },
+    {
+      "username": "taxi9du7@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:11:59"
+    },
+    {
+      "username": "taxi9du7@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:11:59"
+    },
+    {
+      "username": "uberpo5gbg9@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:12:00"
+    },
+    {
+      "username": "uberpo5gbg9@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:12:00"
+    },
+    {
+      "username": "cabk23do1@euploading.com",
+      "reason": "HTTP 403 Forbidden on login",
+      "consecutive_failures": 3,
+      "detected_at": "2026-11-22 21:12:00"
+    },
+    {
+      "username": "cabk23do1@euploading.com",
+      "reason": "HTTP 403 detected in sweep: HTTPError: 403 Client Error: Forbidden for url: https://thecryptotaxi.com/api/auth/login",
+      "consecutive_failures": 1,
+      "detected_at": "2026-11-22 21:12:00"
+    }
+  ]
+}
