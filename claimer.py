@@ -23,6 +23,7 @@ from requests.adapters import HTTPAdapter
 from ban_detection import is_ban_error, is_confirmed_ban_record, suspension_reason
 from monitor_safety import (SafetyStop, RetryLater, RequestPacer, SharedMonitorLock,
                             check_policy, retry_after_seconds)
+from monitor_runtime import write_report
 from runtime_config import DATA_DIR, initialize_data, monitoring_enabled, primary_username
 
 BASE = 'https://thecryptotaxi.com/api'
@@ -307,7 +308,9 @@ class ReadOnlyMonitor:
         stop_code = 'manual_review'
         try:
             self.publish_activity('starting')
+            write_report('logging_in')
             self.login()
+            write_report('waiting_first_read')
             cooldowns = 0
             while True:
                 try:
@@ -317,10 +320,12 @@ class ReadOnlyMonitor:
                     if cooldowns >= MAX_CONSECUTIVE_COOLDOWNS:
                         raise SafetyStop('Repeated cooldowns; worker stopped for manual review', 'rate_limited')
                     self.publish_activity('cooldown', seconds=cooldown.seconds)
+                    write_report('cooldown')
                     sleep(cooldown.seconds)
                 else:
                     cooldowns = 0
                     self.publish_activity('waiting', seconds=delay, reason=reason)
+                    write_report('waiting')
                     sleep(delay)
         except RetryLater:
             # Only the one startup login can reach here: never retry it.
@@ -342,6 +347,7 @@ class ReadOnlyMonitor:
                 # Ownership/state may be unavailable. Do not reconnect or mask
                 # the original error with driver details or a misleading state.
                 log.error('Unable to record worker stop; inspect Railway logs.')
+            write_report('stopped', code=stop_code)
 
 
 def main():
@@ -350,19 +356,24 @@ def main():
     if not monitoring_enabled():
         log.info('External monitoring disabled. Automatic actions have been removed.')
         return
+    write_report('starting')
     user = primary_username()
     if not user or not os.environ.get('PRIMARY_ACCOUNT_PASSWORD'):
         log.error('Configure the primary account in Railway Variables; worker remains stopped.')
+        write_report('stopped', code='invalid_config')
         return
     try:
+        write_report('acquiring_lock')
         with SharedMonitorLock(user) as ownership:
             monitor = ReadOnlyMonitor(user, ownership)
             monitor.run()
     except SafetyStop as error:
+        write_report('stopped', code=error.code)
         log.warning('%s', error)
     except KeyboardInterrupt:
-        pass
+        write_report('stopped', code='manual_stop')
     except Exception:
+        write_report('stopped', code='manual_review')
         log.error('Worker stopped safely; inspect configuration without sharing secrets.')
 
 

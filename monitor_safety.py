@@ -85,7 +85,7 @@ class SharedMonitorLock:
     def __enter__(self):
         url = os.environ.get('MONITOR_LOCK_DATABASE_URL', '')
         if not url or not self.user:
-            raise SafetyStop('A shared monitor lock database and primary account are required')
+            raise SafetyStop('A shared monitor lock database and primary account are required', 'invalid_config')
         try:
             if self.connect is None:
                 import psycopg
@@ -93,7 +93,7 @@ class SharedMonitorLock:
             self.connection = self.connect(url, autocommit=True, connect_timeout=10)
             result = self.connection.execute('SELECT pg_try_advisory_lock(%s)', (self.key,)).fetchone()
             if not result or result[0] is not True:
-                raise SafetyStop('Another monitor already owns this account')
+                raise SafetyStop('Another monitor already owns this account', 'already_running')
             self.connection.execute('''CREATE TABLE IF NOT EXISTS cryptotaxi_monitor_safety (
                 monitor_key BIGINT PRIMARY KEY,
                 suspended BOOLEAN NOT NULL DEFAULT FALSE,
@@ -102,24 +102,31 @@ class SharedMonitorLock:
             self.connection.execute('''INSERT INTO cryptotaxi_monitor_safety (monitor_key)
                 VALUES (%s) ON CONFLICT (monitor_key) DO NOTHING''', (self.key,))
             self.check()
+        except SafetyStop:
+            self.close()
+            raise
         except Exception:
             self.close()
             # Do not expose DSNs, passwords, hostnames or driver exception text.
-            raise SafetyStop('Unable to obtain exclusive monitor ownership') from None
+            raise SafetyStop('Unable to obtain exclusive monitor ownership', 'database_error') from None
         return self
 
     def check(self):
         try:
             if self.connection is None or self.connection.closed:
-                raise SafetyStop('Monitor ownership was lost')
+                raise SafetyStop('Monitor ownership was lost', 'safety_unavailable')
             row = self.connection.execute(
                 'SELECT suspended FROM cryptotaxi_monitor_safety WHERE monitor_key = %s',
                 (self.key,),
             ).fetchone()
+            if row and row[0] is True:
+                raise SafetyStop('Account is persistently suspended', 'suspended')
             if not row or row[0] is not False:
-                raise SafetyStop('Account is persistently suspended')
+                raise SafetyStop('Safety state is unavailable', 'safety_unavailable')
+        except SafetyStop:
+            raise
         except Exception:
-            raise SafetyStop('Monitor ownership or safety state is unavailable; worker stopped') from None
+            raise SafetyStop('Monitor ownership or safety state is unavailable; worker stopped', 'safety_unavailable') from None
 
     def before_request(self):
         self.check()

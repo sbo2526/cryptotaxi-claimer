@@ -98,10 +98,42 @@ receives, recorded stops and confirmed suspension records, not a complete
 execution log. The monitor also records its planned next check or cooldown end,
 scoped to the selected primary account, and a fixed safe reason when it stops.
 A saved future plan is **not a heartbeat or proof that the worker is alive**;
-overdue plans are explicitly labeled unconfirmed. A crash, forced shutdown or lost
-ownership may prevent recording the stop. Runtime logs remain in Railway.
+overdue plans are explicitly labeled unconfirmed. Runtime logs remain in Railway.
 Rendering and the 30-second page refresh never make site requests or enable
 monitoring.
+
+### When the dashboard has no saved receive
+
+Enabling the flag and supplying a database URL do not prove the worker started.
+A failed database connection or an occupied advisory lock can stop the worker
+**before** it has ownership to publish shared account status. The supervisor now
+provides its dashboard and worker with a fresh private local diagnostics file
+(`MONITOR_RUNTIME_FILE`, managed internally; do not set it in Railway Variables).
+The path is unique to that supervisor run, outside the shared volume, so a
+rejected replica cannot overwrite the owner's shared status or another replica's
+diagnostics. Only fixed stage/error identifiers, the primary identity and a stage
+timestamp are recorded; never driver messages, URLs, credentials or server bodies.
+
+The dashboard distinguishes database setup/connection errors, an occupied lock,
+unavailable safety state, login/session stops and an unreported worker exit.
+A startup-stage report older than three minutes is explicitly unconfirmed and
+requires inspection of **Runtime/Deploy Logs**, rather than showing an endless
+first-receive wait. The supervisor records an exit without restarting the monitor
+and preserves any more specific worker-reported cause. A supervisor/container
+crash or unwritable diagnostics directory can still prevent a report; missing
+reports are shown as unknown, not evidence of a running worker. These reports are
+observability only: no automatic retry, re-login, lock bypass or database reconnect
+has been added. An occupied lock can be an old deployment still shutting down or
+a genuinely active other service; do not force-release it or restart repeatedly.
+
+A previously visible balance disappearing after a deployment is different from a
+slow first read. Check that the service has a persistent volume mounted at
+`/app/data`, `DATA_DIR` points there, and UID 10001 can write to it. Without persistent
+storage the saved snapshots can be lost when Railway replaces a container. The
+application cannot provision/mount a Railway volume or recover lost snapshots;
+an empty local state alone does not establish why the data is absent. The empty
+state and missing receive time now refer to **local stored evidence**, not a claim
+that this account has never successfully received information anywhere.
 
 ### Optional read-only monitoring — ONLY after API permission is confirmed
 
