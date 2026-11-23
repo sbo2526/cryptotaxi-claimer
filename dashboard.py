@@ -168,6 +168,49 @@ def finite_number(value):
         return False
 
 
+STOP_MESSAGES = {
+    'needs_login': 'نشست ورود پذیرفته نشد؛ بررسی و ورود دستی لازم است. ورود مجدد خودکار انجام نمی‌شود.',
+    'access_denied': 'دسترسی رد شده است؛ پایش تا بررسی دستی متوقف می‌ماند.',
+    'rate_limited': 'محدودیت درخواست یا انتظار تکراری؛ پایش برای بررسی دستی متوقف شده است.',
+    'manual_stop': 'توقف دستی ثبت شده است.',
+    'manual_review': 'خطا یا مشکل ایمنی ثبت شده است؛ بررسی دستی لازم است.',
+    'suspended': 'تعلیق ثبت شده است؛ پایش نباید مجدداً فعال شود.',
+}
+SCHEDULE_REASONS = {
+    'trip_end': 'بر اساس پایان سفر ثبت‌شده',
+    'unknown_timer': 'زمان سفر نامشخص است؛ بررسی دوره‌ای',
+    'no_active_trip': 'سفر فعالی ثبت نشده؛ بررسی دوره‌ای',
+    'periodic_check': 'بررسی دوره‌ای سفر طولانی',
+}
+
+
+def saved_activity(status, user, now):
+    """Validate primary-scoped worker evidence; never treat it as liveness."""
+    meta = status.get('_meta')
+    if not user or not isinstance(meta, dict) or meta.get('monitor_user') != user:
+        return None
+    kind = meta.get('monitor_status')
+    if kind not in ('starting', 'waiting', 'cooldown', 'stopped', 'suspended'):
+        return None
+    try:
+        updated = datetime.strptime(meta.get('updated_at', ''), '%Y-%m-%d %H:%M:%S').replace(tzinfo=TZ)
+        if updated > now + timedelta(seconds=30):
+            return None
+    except (TypeError, ValueError):
+        return None
+    next_check = None
+    if kind in ('waiting', 'cooldown'):
+        try:
+            next_check = datetime.strptime(meta.get('next_check_at', ''), '%Y-%m-%d %H:%M:%S').replace(tzinfo=TZ)
+            if next_check <= updated:
+                return None
+        except (TypeError, ValueError):
+            return None
+    return {'status': kind, 'updated': updated, 'next_check': next_check,
+            'message': STOP_MESSAGES.get(str(meta.get('stop_code')), STOP_MESSAGES['manual_review']),
+            'reason': SCHEDULE_REASONS.get(str(meta.get('schedule_reason')), '')}
+
+
 def dashboard_view(status=None, now=None):
     """Separate configured identity, monitoring opt-in and received data.
 
@@ -181,6 +224,7 @@ def dashboard_view(status=None, now=None):
         now = now.replace(tzinfo=TZ)
     user = primary_username()
     enabled = monitoring_enabled()
+    activity = saved_activity(status, user, now)
     suspended = any(row['username'] == user and row['confirmed'] for row in banned_accounts_info())
     account = status.get(user) if user else None
     received = None
@@ -204,21 +248,36 @@ def dashboard_view(status=None, now=None):
         label, tone, note = 'در انتظار تنظیم اکانت', 'warning', 'نام اکانت اصلی هنوز مشخص نشده است.'
     elif not complete_config:
         label, tone, note = 'پیکربندی پایش ناقص', 'warning', 'تنظیمات لازم برای پایش کامل نیست؛ فعال‌بودن آن تأیید نمی‌شود.'
+    elif activity and activity['status'] in ('stopped', 'suspended'):
+        label, tone, note = 'پایش متوقف شده است', 'warning', activity['message']
+    elif activity and activity['status'] == 'cooldown':
+        label, tone, note = 'مهلت انتظار ثبت شده است', 'warning', 'بررسی بعدی باید محدودیت سرور و بودجهٔ مشترک درخواست را رعایت کند.'
     elif received is None:
         label, tone, note = 'در انتظار اولین دریافت', 'warning', 'هنوز دریافت موفقی برای اکانت اصلی ثبت نشده است.'
     elif stale:
         label, tone, note = 'اطلاعات قدیمی', 'warning', 'بیش از ۱۰ دقیقه از آخرین دریافت موفق گذشته است.'
     else:
         label, tone, note = 'آخرین دریافت تازه است', 'success', 'این وضعیت تازگی داده را نشان می‌دهد، نه تضمین اجرای فعلی پایش.'
+    if enabled and not suspended and activity and activity['next_check']:
+        scheduled = fmt_jalali(activity['next_check'].strftime('%Y-%m-%d %H:%M:%S'))
+        if activity['next_check'] <= now:
+            note += ' موعد بررسی ثبت‌شده گذشته است؛ دریافت تازه یا اجرای فعلی پایش تأیید نمی‌شود.'
+        else:
+            label_text = 'پایان مهلت انتظار ثبت‌شده' if activity['status'] == 'cooldown' else 'بررسی بعدیِ برنامه‌ریزی‌شده'
+            note += f' {label_text}: {scheduled} (تهران). این زمان تضمین اجرا نیست.'
+            if activity['reason']:
+                note += ' ' + activity['reason'] + '.'
     if not enabled:
         empty_note = 'پایش خارجی خاموش است؛ هیچ عملیات خودکاری انجام نمی‌شود.'
     elif suspended:
         empty_note = 'پایش این اکانت متوقف است؛ سابقهٔ تعلیق را در پایین صفحه ببینید.'
+    elif activity and activity['status'] in ('stopped', 'suspended'):
+        empty_note = activity['message']
     else:
         empty_note = 'دریافت موفقی ثبت نشده است؛ هیچ عملیات استارت، اجاره یا دریافت جایزه انجام نمی‌شود.'
     return {'user': user, 'enabled': enabled, 'suspended': suspended, 'sample': sample,
             'received': received, 'stale': stale, 'label': label, 'tone': tone, 'note': note,
-            'empty_note': empty_note}
+            'empty_note': empty_note, 'activity': activity}
 
 
 def status_section(view):
@@ -314,6 +373,10 @@ def event_lines():
     if view['received']:
         timestamp = view['received'].strftime('%Y-%m-%d %H:%M:%S')
         events.append((timestamp, f'{fmt_jalali(timestamp)} · آخرین دریافت موفق اطلاعات اکانت اصلی'))
+    activity = view.get('activity')
+    if activity and activity['status'] in ('stopped', 'suspended'):
+        timestamp = activity['updated'].strftime('%Y-%m-%d %H:%M:%S')
+        events.append((timestamp, f'{fmt_jalali(timestamp)} · {activity["message"]}'))
     for record in banned_accounts_info():
         if record['confirmed']:
             timestamp = record['detected_at']

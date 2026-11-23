@@ -15,13 +15,27 @@
 - Shared PostgreSQL ownership is required BEFORE any external request. All
   deployments for the primary account must use the **same database**.
 - No hidden transport retries, redirects, proxy switching or repeated login.
-  Requests are paced at least 60 seconds apart; state polling is every 5 minutes
-  after each completed poll. These are conservative defaults, NOT a guarantee of
-  site approval or immunity from suspension.
+  Each worker makes **at most one login attempt** and reuses the same in-memory
+  `requests.Session` (including server cookies) for all reads. Session expiry does
+  not trigger an automatic login. Sessions are not saved to disk: an explicitly
+  started new worker needs a new login, subject to the shared request budget.
+- Requests remain paced at least 60 seconds apart. Subsequent state reads use
+  the nearest saved trip end plus 15 seconds, with a minimum 5-minute gap and a
+  maximum 6-hour periodic check. With no active trips or an invalid/unknown timer,
+  the fallback is 30 minutes (or an earlier known trip). Only numeric millisecond
+  timestamps are used. Expired timers cause a delayed **state read**, never an
+  assumed completion, automatic claim or trip start. Timers in the dashboard
+  count down locally without site requests. These are conservative application
+  defaults, NOT the site's published limits, permission or a guarantee against bans.
 - 429/503 respect numeric or HTTP-date `Retry-After` with at least a 5-minute
-  cooldown. The same request is not immediately reissued. A rate-limited login
-  stops for manual review. Generic 401/403 stop the worker, but are NOT recorded
-  as an account ban. Explicit suspension stops the client immediately, closes the
+  cooldown, also persisted in the shared database. The worker makes at most two
+  delayed read retries and stops on the third consecutive cooldown; a successful
+  read resets that counter. The same request is not immediately reissued. A
+  deferred/rate-limited login stops without retry. Generic 401/403 stop the worker
+  for manual session/access review, but are NOT recorded as an account ban.
+  Network failures, redirects, unexpected API errors and malformed state stop
+  without retry or re-login; a previous good snapshot is retained as historical
+  data. Explicit suspension stops the client immediately, closes the
   session and records a persistent suspension marker in the shared database and
   local archive. Future starts refuse it, even after a container is replaced.
   The request budget and server cooldown are also stored in the shared database.
@@ -60,9 +74,14 @@ from a valid saved snapshot; unknown balance is a dash, not a fabricated zero.
 The creator panel and old reward/claim counters have been removed. Suspension
 history and local persisted events are collapsed by default; the browser remembers
 each panel's open/closed state when storage is available. Events summarize saved
-receives and confirmed suspension records, not a complete execution log. Runtime
-logs remain in Railway. Rendering and the 30-second page refresh never make site
-requests or enable monitoring.
+receives, recorded stops and confirmed suspension records, not a complete
+execution log. The monitor also records its planned next check or cooldown end,
+scoped to the selected primary account, and a fixed safe reason when it stops.
+A saved future plan is **not a heartbeat or proof that the worker is alive**;
+overdue plans are explicitly labeled unconfirmed. A crash, forced shutdown or lost
+ownership may prevent recording the stop. Runtime logs remain in Railway.
+Rendering and the 30-second page refresh never make site requests or enable
+monitoring.
 
 ### Optional read-only monitoring — ONLY after API permission is confirmed
 

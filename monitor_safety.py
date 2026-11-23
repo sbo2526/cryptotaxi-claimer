@@ -11,7 +11,13 @@ from runtime_config import monitoring_enabled, primary_username
 
 
 class SafetyStop(RuntimeError):
-    """Stop the worker; no automatic restart or login loop."""
+    """Stop the worker; no automatic restart or login loop.
+
+    code is a fixed internal identifier, never a server message or secret.
+    """
+    def __init__(self, message, code='manual_review'):
+        super().__init__(message)
+        self.code = code
 
 
 class RetryLater(RuntimeError):
