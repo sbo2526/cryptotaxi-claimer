@@ -147,7 +147,7 @@ class MonitorSafetyTests(unittest.TestCase):
         with self.assertRaises(RetryLater) as result:
             self.client.poll()
         self.assertEqual(result.exception.seconds, 1200)
-        self.pacer.cooldown.assert_called_once_with(1200)
+        self.assertEqual([call.args[0] for call in self.pacer.cooldown.call_args_list], [60.0, 1200])
         self.ownership.cooldown.assert_called_once_with(1200)
         self.session.post.assert_called_once()
 

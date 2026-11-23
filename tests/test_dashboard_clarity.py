@@ -151,6 +151,13 @@ class DashboardClarityTests(unittest.TestCase):
         self.assertNotIn('استارت نشده', html)
         self.assertNotIn('در نوبت بررسی خودکار', html)
 
+    def test_legacy_generic_stop_does_not_prove_a_start_was_never_sent(self):
+        view = self.view()
+        view['runtime'] = {'stage': 'stopped', 'code': 'manual_review'}
+        html = dashboard.car_card({'status': 'idle'}, view)
+        self.assertIn('وضعیت استارت تأیید نشده', html)
+        self.assertNotIn('استارت نشده در آخرین دریافت', html)
+
     def test_disabled_flag_is_actionable_and_priority_is_explained_when_enabled(self):
         view = self.view([{'status': 'idle', 'start_check': 'eligible'}])
         with patch.dict(os.environ, {'AUTO_START_TRIPS_ENABLED': 'false'}):

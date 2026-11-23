@@ -11,7 +11,7 @@ import requests
 
 import claimer
 import dashboard
-from monitor_safety import SafetyStop, SharedMonitorLock, check_policy
+from monitor_safety import RetryLater, RequestPacer, SafetyStop, SharedMonitorLock, check_policy
 from runtime_config import ALLOWED_PRIMARY_ACCOUNT
 from trip_rules import start_block
 
@@ -191,6 +191,77 @@ class AutoStartTests(unittest.TestCase):
             self.client.request('trips/start', {'carId': 1})
         self.session.post.assert_not_called()
         self.assertEqual(self.db.rows, {})
+
+    def test_shared_budget_deferral_before_start_is_a_cooldown_not_a_stop(self):
+        self.session.post.return_value = self.state()
+        with patch.object(self.owner, 'before_request', side_effect=[None, RetryLater(0.25)]):
+            with self.assertRaises(RetryLater) as error:
+                self.client.poll()
+        self.assertEqual(error.exception.seconds, 0.25)
+        self.assertFalse(self.client.stopped)
+        self.assertEqual(self.calls(), ['state'])
+        self.assertEqual(self.db.rows, {})
+
+    def test_verification_budget_deferral_preserves_unknown_outcome_and_journal(self):
+        self.session.post.side_effect = [self.state(), response({'trip': self.trip})]
+        with patch.object(self.owner, 'before_request', side_effect=[None, None, RetryLater(0.25)]):
+            with self.assertRaises(SafetyStop) as error:
+                self.client.poll()
+        self.assertEqual(error.exception.code, 'start_unknown')
+        self.assertEqual(self.calls(), ['state', 'trips/start'])
+        self.assertEqual(self.journal()['phase'], 'confirmed')
+        # A new process cannot start another taxi while the outcome is unobserved.
+        with self.assertRaises(SafetyStop) as unresolved:
+            self.owner.ensure_no_unresolved_starts()
+        self.assertEqual(unresolved.exception.code, 'start_unknown')
+
+    def test_db_reservation_latency_does_not_create_perpetual_budget_deferrals(self):
+        clock, shared_next = [0.0], [0.0]
+        reservations = []
+        def sleep(seconds):
+            clock[0] += seconds
+        def reserve_budget():
+            if clock[0] < shared_next[0]:
+                raise RetryLater(shared_next[0] - clock[0])
+            clock[0] += 0.02  # DB latency after the local timer was armed.
+            shared_next[0] = clock[0] + 60.0
+            reservations.append(clock[0])
+        self.client.pacer = RequestPacer(clock=lambda: clock[0], sleep=sleep)
+        self.session.post.side_effect = [self.state(), response({'trip': self.trip}),
+                                         self.state(own=[ready(trip=self.trip)])]
+        with patch.object(self.owner, 'before_request', side_effect=reserve_budget), \
+             patch.object(claimer.time, 'monotonic', side_effect=lambda: clock[0]):
+            self.client.poll()
+        self.assertEqual(self.calls(), ['state', 'trips/start', 'state'])
+        self.assertEqual(self.journal()['phase'], 'observed')
+        self.assertEqual(len(reservations), 3)
+        for earlier, later in zip(reservations, reservations[1:]):
+            self.assertGreaterEqual(later - earlier, 60)
+
+    def test_pre_send_cooldown_recovers_with_fresh_state_not_blind_start_retry(self):
+        self.session.post.side_effect = [response({}), self.state(), self.state(),
+                                         response({'trip': self.trip}),
+                                         self.state(own=[ready(trip=self.trip)])]
+        waits = []
+        def sleep(seconds):
+            waits.append(seconds)
+            if len(waits) == 2:
+                raise KeyboardInterrupt()
+        # login, state, deferred start (NO send), fresh state, start, verify
+        with patch.object(self.owner, 'before_request', side_effect=[None, None, RetryLater(0.25), None, None, None]):
+            with self.assertRaises(KeyboardInterrupt):
+                self.client.run(sleep=sleep)
+        self.assertEqual(waits[0], 0.25)
+        self.assertEqual(self.calls(), ['auth/login', 'state', 'state', 'trips/start', 'state'])
+        self.assertEqual(self.journal()['phase'], 'observed')
+
+    def test_failed_post_start_state_read_cannot_be_labelled_as_plain_state_failure(self):
+        self.session.post.side_effect = [self.state(), response({'trip': self.trip}), response({})]
+        with self.assertRaises(SafetyStop) as error:
+            self.client.poll()
+        self.assertEqual(error.exception.code, 'start_unknown')
+        self.assertEqual(self.journal()['phase'], 'confirmed')
+        self.assertEqual(self.calls(), ['state', 'trips/start', 'state'])
 
     def test_stale_preflight_after_pacing_cannot_reserve_or_send(self):
         self.session.post.return_value = self.state()

@@ -21,7 +21,8 @@ STAGES = frozenset(('starting', 'acquiring_lock', 'logging_in', 'waiting_first_r
 STOP_CODES = frozenset(('invalid_config', 'database_error', 'already_running',
                         'safety_unavailable', 'worker_exited', 'needs_login',
                         'access_denied', 'rate_limited', 'manual_stop',
-                        'manual_review', 'suspended', 'start_unknown', 'start_blocked'))
+                        'manual_review', 'suspended', 'start_unknown', 'start_blocked',
+                        'request_failed', 'state_invalid'))
 
 
 def report_path(path=None):
