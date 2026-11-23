@@ -18,7 +18,8 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from ban_detection import is_ban_error, is_confirmed_ban_record
-from runtime_config import DATA_DIR, primary_username, monitoring_enabled, initialize_data
+from runtime_config import (DATA_DIR, primary_username, monitoring_enabled, initialize_data,
+                            ALLOWED_PRIMARY_ACCOUNT)
 
 TZ = ZoneInfo('Asia/Tehran')
 PORT = int(os.environ.get('PORT', '8080'))
@@ -282,7 +283,8 @@ def dashboard_view(status=None, now=None):
 
 def status_section(view):
     account_label = 'تعلیق‌شده' if view['suspended'] else ('تنظیم‌شده' if view['user'] else 'تنظیم نشده')
-    account_note = esc(view['user']) if view['user'] else 'اکانت اصلی را با PRIMARY_ACCOUNT مشخص کنید؛ این کار پایش را روشن نمی‌کند.'
+    account_note = esc(view['user']) if view['user'] else (
+        f'تنها اکانت مجاز: {esc(ALLOWED_PRIMARY_ACCOUNT)}. مقدار PRIMARY_ACCOUNT باید همین باشد؛ این کار پایش را روشن نمی‌کند.')
     received = fmt_jalali(view['received'].strftime('%Y-%m-%d %H:%M:%S')) if view['received'] else 'هنوز دریافت نشده'
     return f'''<section class="overview" aria-label="وضعیت داشبورد">
       <article class="overview-card"><span class="eyebrow">وضعیت پایش</span>

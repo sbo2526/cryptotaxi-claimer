@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 import dashboard
+import runtime_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,7 +24,7 @@ class FreeRemovedTests(unittest.TestCase):
                 return stale_status
             return default
 
-        with patch.dict(os.environ, {'PRIMARY_ACCOUNT': 'existing-account'}), patch.object(dashboard, 'load_json', side_effect=load):
+        with patch.object(runtime_config, 'ALLOWED_PRIMARY_ACCOUNT', 'existing-account'), patch.dict(os.environ, {'PRIMARY_ACCOUNT': 'existing-account'}), patch.object(dashboard, 'load_json', side_effect=load):
             page = dashboard.render()
         self.assertIn('existing-account', page)
         self.assertIn('هنوز اطلاعاتی از اکانت دریافت نشده است.', page)

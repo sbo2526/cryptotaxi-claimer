@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 import requests
 
 import claimer
+import runtime_config
 from monitor_safety import (SafetyStop, RetryLater, RequestPacer, SharedMonitorLock,
                             check_policy, retry_after_seconds)
 
@@ -27,6 +28,9 @@ def response(status=200, payload=None, headers=None):
 
 class MonitorSafetyTests(unittest.TestCase):
     def setUp(self):
+        allowed = patch.object(runtime_config, 'ALLOWED_PRIMARY_ACCOUNT', 'main')
+        allowed.start()
+        self.addCleanup(allowed.stop)
         env = patch.dict(os.environ, ENV, clear=True)
         env.start()
         self.addCleanup(env.stop)

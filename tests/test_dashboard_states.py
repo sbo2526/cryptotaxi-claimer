@@ -6,6 +6,7 @@ from unittest.mock import patch
 import requests
 
 import dashboard
+import runtime_config
 
 
 NOW = datetime(2026, 11, 23, 11, 40, 5, tzinfo=dashboard.TZ)
@@ -21,6 +22,9 @@ def snapshot(when=NOW, **changes):
 
 class DashboardStateTests(unittest.TestCase):
     def setUp(self):
+        allowed = patch.object(runtime_config, 'ALLOWED_PRIMARY_ACCOUNT', PRIMARY)
+        allowed.start()
+        self.addCleanup(allowed.stop)
         env = patch.dict(os.environ, {'PRIMARY_ACCOUNT': PRIMARY}, clear=True)
         env.start()
         self.addCleanup(env.stop)

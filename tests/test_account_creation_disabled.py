@@ -6,6 +6,7 @@ from unittest.mock import patch
 import claimer
 import dashboard
 import supervisor
+import runtime_config
 
 
 class SafeDefaultsTests(unittest.TestCase):
@@ -27,7 +28,8 @@ class SafeDefaultsTests(unittest.TestCase):
         self.assertFalse(hasattr(dashboard, 'creator_status_section'))
 
     def test_only_primary_identity_can_appear(self):
-        with patch.dict(os.environ, {'PRIMARY_ACCOUNT': 'main'}, clear=True), \
+        with patch.object(runtime_config, 'ALLOWED_PRIMARY_ACCOUNT', 'main'), \
+             patch.dict(os.environ, {'PRIMARY_ACCOUNT': 'main'}, clear=True), \
              patch.object(dashboard, 'banned_accounts_info', return_value=[]):
             self.assertEqual(dashboard.active_accounts_info(), [{'username': 'main'}])
             self.assertEqual(len(dashboard.active_accounts_info()), 1)

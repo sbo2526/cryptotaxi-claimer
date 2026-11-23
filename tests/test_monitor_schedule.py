@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 import requests
 
 import claimer
+import runtime_config
 import dashboard
 from monitor_safety import RetryLater, SafetyStop
 
@@ -64,6 +65,9 @@ class ScheduleTests(unittest.TestCase):
 
 class MonitorLoopTests(unittest.TestCase):
     def setUp(self):
+        allowed = patch.object(runtime_config, 'ALLOWED_PRIMARY_ACCOUNT', 'main')
+        allowed.start()
+        self.addCleanup(allowed.stop)
         env = patch.dict(os.environ, ENV, clear=True)
         env.start()
         self.addCleanup(env.stop)
@@ -282,6 +286,9 @@ class MonitorLoopTests(unittest.TestCase):
 
 class SavedActivityTests(unittest.TestCase):
     def setUp(self):
+        allowed = patch.object(runtime_config, 'ALLOWED_PRIMARY_ACCOUNT', 'main')
+        allowed.start()
+        self.addCleanup(allowed.stop)
         env = patch.dict(os.environ, ENV, clear=True)
         env.start()
         self.addCleanup(env.stop)
