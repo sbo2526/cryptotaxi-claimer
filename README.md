@@ -3,8 +3,9 @@
 ## Safety defaults
 
 - **All website traffic is OFF by default.** The supervisor starts only the dashboard.
-- Registration, fake referrals, disposable-email creation, proxy rotation,
-  rentals and reward claims remain removed.
+- Registration, fake referrals, disposable-email creation, proxy rotation and
+  reward claims remain removed. New rentals have only an inactive local preview;
+  market reads, rental execution and payments remain unavailable.
 - Monitoring alone permits only `auth/login` and `state`. The separately opted-in
   `AUTO_START_TRIPS_ENABLED=true` adds only the guarded `trips/start` path. Reading
   or automating a website/API may require permission: obtain that permission
@@ -249,6 +250,37 @@ The browser remains a local-data viewer: page refreshes/GETs/POSTs do not dispat
 starts, and unsupported mutation routes remain disabled. No site credentials or
 sessions are recovered from Git history. Mission/referral `claim` and `market/rent`
 remain unavailable even with the trip-start flag on.
+
+### New-rental workspace — restored preview, deliberately inactive
+
+The **مدیریت رنت** panel is separate from using already-rented taxis for trips.
+It shows the count in the selected primary account's last valid local snapshot,
+the old application's two-rental cap, and theoretical additional slots. Unknown
+account data stays unknown; this arithmetic is not permission to rent. Existing
+rentals above the cap (for example four) are preserved, not cancelled or deleted.
+The old cap is **not** a confirmed game limit or a new restriction on driving
+already-rented taxis. Auto-start settings do not enable new rentals.
+
+`rental_rules.py` reconstructs the old rules from `claimer.py` at `a0460df`:
+count existing rentals, cap additional drafts at two minus that count, and retain
+listing order. Historically `market` returned `listings` and `market/rent` accepted
+`{listingId}`; those historical shapes are not a verified current API contract.
+The pure function accepts optional offline listings for tests/future review,
+whitelists display fields, rejects malformed/duplicate IDs, and **always** returns
+`enabled=False` and `requires_review=True`. It does not rank profitability or
+invent prices, free offers, contract duration, shifts or daily-trip allowances.
+The dashboard supplies no listings, so it honestly says the market is not checked,
+not that the market is empty. No fake market file or sample offers are deployed.
+
+There is no rent worker, network client, executable rent payload, activation route,
+or browser handler. `market` and `market/rent` remain denied by the central request
+policy; all dashboard POSTs still return 405. Old-style `AUTO_RENT_ENABLED=true`
+or other environment variables cannot activate it. Restoring execution in a
+future phase requires separate authorization, verified prices/contract terms and
+API permission, an explicit spending policy, shared-session/lock pacing and a
+durable no-replay journal for ambiguous rental/payment outcomes. None is enabled
+by this preview. No credentials, sessions, multi-account loops or automatic retries
+were recovered from the historical implementation.
 
 ### Optional read-only monitoring — ONLY after API permission is confirmed
 
