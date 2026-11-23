@@ -885,6 +885,22 @@ def creator_status_info():
 def creator_status_section(info):
     """HTML section for the account-creator status panel with live countdown,
     phase tracking, Jalali (Solar) time, and cycle statistics."""
+    if info.get("enabled") is False:
+        current = esc(str(info.get("current", 0)))
+        return f"""  <section class="creator-status" aria-label="ساخت خودکار اکانت‌ها">
+    <div class="creator-status__head">
+      <div class="creator-status__icon" aria-hidden="true">🏭</div>
+      <div class="creator-status__title">ساخت خودکار اکانت‌ها</div>
+      <span class="creator-status__badge creator-status__badge--idle">⛔ غیرفعال</span>
+    </div>
+    <div class="creator-stat creator-stat--blue">
+      <small>تعداد اکانت‌های موجود</small><b>{current}</b>
+    </div>
+    <p id="creatorStatusMsg" style="color:var(--muted);margin:16px 0 0;line-height:1.9">
+      ساخت خودکار اکانت‌ها غیرفعال است. اکانت جدیدی به‌صورت خودکار ساخته نمی‌شود.
+    </p>
+  </section>"""
+
     running = info.get("running", False)
     done = info.get("done", False)
     current = info.get("current", 0)
@@ -912,9 +928,7 @@ def creator_status_section(info):
     started_at = info.get("started_at", "尚无")
     cycle_elapsed = info.get("cycle_elapsed")
 
-    if info.get("enabled") is False:
-        badge = "<span class='creator-status__badge creator-status__badge--idle'>⛔ غیرفعال</span>"
-    elif done:
+    if done:
         badge = "<span class='creator-status__badge creator-status__badge--done'>✅ تکمیل شد</span>"
     elif running:
         badge = "<span class='creator-status__badge creator-status__badge--active'><span class='dot' style='width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite'></span> در حال اجرا</span>"
@@ -1847,6 +1861,11 @@ def render():
       var el = document.getElementById('creatorCountdown');
       var wrap = document.getElementById('creatorCountdownWrap');
       if (!el || !wrap) return;
+      if (!creatorNextCycleTs) {{
+        el.textContent = '—';
+        wrap.style.color = 'var(--muted)';
+        return;
+      }}
       var diff = creatorNextCycleTs - Date.now();
       if (diff > 0) {{
         el.textContent = formatCountdown(diff);
@@ -1869,9 +1888,8 @@ def render():
           var cycleInfo = document.getElementById('creatorCycleInfo');
           if (fill) fill.style.width = (j.pct || 0) + '%';
           // Update next cycle timestamp for countdown
-          if (j.next_cycle_ts) {{
-            creatorNextCycleTs = j.next_cycle_ts * 1000; // epoch seconds -> ms
-          }}
+          creatorNextCycleTs = j.enabled !== false && j.next_cycle_ts
+            ? j.next_cycle_ts * 1000 : 0; // reset stale countdown when disabled
           if (msg) {{
             msg.textContent = j.message || '';
             msg.style.color = j.done ? 'var(--gold)' : (j.running ? 'var(--green)' : 'var(--blue)');
