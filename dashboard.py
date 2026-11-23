@@ -666,10 +666,10 @@ def events_section():
 
 
 PAGE_CSS = '''
-/* B Nazanin is used when installed; no font binary or external CDN is bundled.
+/* IRANSans is used when installed; no font binary or external CDN is bundled.
    Arabic glyph ranges keep Latin identifiers and code in their familiar fonts. */
-@font-face{font-family:"Dashboard Persian";src:local("B Nazanin"),local("BNazanin"),local("B Nazanin Regular");font-style:normal;font-weight:400;font-display:swap;unicode-range:U+0600-06FF,U+0750-077F,U+08A0-08FF,U+200C-200F,U+FB50-FDFF,U+FE70-FEFF}
-@font-face{font-family:"Dashboard Persian";src:local("B Nazanin Bold"),local("BNazanin-Bold"),local("B Nazanin");font-style:normal;font-weight:700;font-display:swap;unicode-range:U+0600-06FF,U+0750-077F,U+08A0-08FF,U+200C-200F,U+FB50-FDFF,U+FE70-FEFF}
+@font-face{font-family:"Dashboard Persian";src:local("IRANSans"),local("IRANSansWeb"),local("IRANSans-Regular"),local("IRANSans Regular");font-style:normal;font-weight:400;font-display:swap;unicode-range:U+0600-06FF,U+0750-077F,U+08A0-08FF,U+200C-200F,U+FB50-FDFF,U+FE70-FEFF}
+@font-face{font-family:"Dashboard Persian";src:local("IRANSans-Bold"),local("IRANSansWeb-Bold"),local("IRANSans Bold"),local("IRANSansWeb Bold");font-style:normal;font-weight:700;font-display:swap;unicode-range:U+0600-06FF,U+0750-077F,U+08A0-08FF,U+200C-200F,U+FB50-FDFF,U+FE70-FEFF}
 
 .automation-note{padding:14px 17px;border:1px solid var(--info-line);background:var(--info-bg);border-radius:10px;color:var(--blue);font-size:16px;margin:0 0 18px;overflow-wrap:anywhere}
 .automation-note a{text-decoration:underline;white-space:nowrap}

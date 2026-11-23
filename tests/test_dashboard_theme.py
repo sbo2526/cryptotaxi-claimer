@@ -35,12 +35,15 @@ class DashboardThemeTests(unittest.TestCase):
             with self.subTest(foreground=foreground, background=background):
                 self.assertGreaterEqual(contrast(palette[foreground], palette[background]), 4.5)
 
-    def test_persian_faces_use_only_installed_b_nazanin_and_cover_regular_and_bold(self):
+    def test_persian_faces_use_only_installed_iransans_and_cover_regular_and_bold(self):
         faces = re.findall(r'@font-face\{([^}]+)\}', dashboard.PAGE_CSS)
         self.assertEqual(len(faces), 2)
+        self.assertNotIn('Nazanin', dashboard.PAGE_CSS)
+        self.assertIn('local("IRANSansWeb")', faces[0])
+        self.assertIn('local("IRANSansWeb-Bold")', faces[1])
         for face, weight in zip(faces, ('400', '700')):
             self.assertIn('font-family:"Dashboard Persian"', face)
-            self.assertIn('local("B Nazanin', face)
+            self.assertIn('local("IRANSans', face)
             self.assertIn(f'font-weight:{weight}', face)
             self.assertIn('font-display:swap', face)
             self.assertIn('unicode-range:U+0600-06FF', face)
