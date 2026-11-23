@@ -273,7 +273,7 @@ def car_card(car):
         countdown = (
             "<div class='cd cd--idle'><div class='cd__row'><span class='cd__label'>✅ آماده برای استارت خودکار</span></div></div>"
             if status == "idle" else
-            "<div class='cd cd--idle'><div class='cd__row'><span class='cd__label'>❌ kuota تمام شده / خارج از خدمت</span></div></div>"
+            f"<div class='cd cd--idle'><div class='cd__row'><span class='cd__label'>⏳ {esc(car.get('block_msg') or 'در انتظار اجازهٔ استارت / خارج از خدمت')}</span></div></div>"
         )
 
     return f"""
