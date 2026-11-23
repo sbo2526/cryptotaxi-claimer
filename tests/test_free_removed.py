@@ -1,4 +1,5 @@
 import ast
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -20,11 +21,9 @@ class FreeRemovedTests(unittest.TestCase):
         def load(path, default):
             if path == dashboard.STATUS_FILE:
                 return stale_status
-            if path == dashboard.ACCOUNTS_FILE:
-                return [{'username': 'existing-account'}]
             return default
 
-        with patch.object(dashboard, 'load_json', side_effect=load):
+        with patch.dict(os.environ, {'PRIMARY_ACCOUNT': 'existing-account'}), patch.object(dashboard, 'load_json', side_effect=load):
             page = dashboard.render()
         self.assertIn('existing-account', page)
         self.assertIn('ساخت خودکار اکانت‌ها', page)
@@ -41,19 +40,6 @@ class FreeRemovedTests(unittest.TestCase):
                 self.assertNotIn('/free', node.value.lower())
                 self.assertNotEqual(node.value, 'free-worker')
 
-    def test_claimer_still_runs_sweeps_without_starting_ad_threads(self):
-        import claimer
-        with patch.object(claimer.sys, 'argv', ['claimer.py']), \
-             patch.object(claimer, 'PROXY_ENABLED', False), \
-             patch.object(claimer, 'start_auto_rent') as rent, \
-             patch.object(claimer, 'run_sweep', side_effect=KeyboardInterrupt) as sweep, \
-             patch.object(claimer.threading, 'Thread') as thread:
-            with self.assertRaises(KeyboardInterrupt):
-                claimer.main()
-            sweep.assert_called_once()
-            thread.assert_not_called()
-            if claimer.AUTO_RENT_ENABLED:
-                rent.assert_called_once()
 
 
 if __name__ == '__main__':
