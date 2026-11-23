@@ -33,6 +33,32 @@ class AccountCreationDisabledTests(unittest.TestCase):
             self.assertIn('غیرفعال', dashboard.creator_status_section(info))
             self.assertIn('غیرفعال', dashboard.referral_faker_status_section())
 
+    def test_disabled_panel_only_shows_existing_account_count(self):
+        panel = dashboard.creator_status_section({
+            'enabled': False, 'current': 54, 'target': 100,
+            'running': True, 'next_cycle_ts': 9999999999,
+            'last_action': '尚无',
+        })
+        self.assertIn('⛔ غیرفعال', panel)
+        self.assertIn('تعداد اکانت‌های موجود', panel)
+        self.assertIn('<b>54</b>', panel)
+        for obsolete in ('尚无', 'creatorCountdown', 'creatorFill',
+                         'هدف نهایی', 'باقی مانده', 'خطاها',
+                         'interval', 'زمان راه‌اندازی', 'اطلاعات چرخه',
+                         '🚀 شروع شد', 'آخرین اکانت ساخته‌شده'):
+            with self.subTest(obsolete=obsolete):
+                self.assertNotIn(obsolete, panel)
+
+    def test_disabled_panel_handles_empty_accounts(self):
+        panel = dashboard.creator_status_section({'enabled': False, 'current': 0})
+        self.assertIn('<b>0</b>', panel)
+        self.assertNotIn('creatorCountdown', panel)
+
+    def test_enabled_panel_retains_cycle_details(self):
+        panel = dashboard.creator_status_section({'running': True, 'current': 54})
+        self.assertIn('creatorCountdown', panel)
+        self.assertIn('در حال اجرا', panel)
+
     def test_standalone_workers_exit_without_network_requests(self):
         import account_creator
         import referral_faker
