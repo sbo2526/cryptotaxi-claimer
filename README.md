@@ -83,6 +83,14 @@ monitor process is running; samples older than ten minutes are labeled stale.
 Without a valid primary snapshot, the dashboard shows an explicit Persian empty
 state instead of zero balance/trip cards. Wallet and car information appear only
 from a valid saved snapshot; unknown balance is a dash, not a fabricated zero.
+Quota usage/limit, each car's reported extra-trip count (`quota.bonus`) and the
+account-wide extra-trip count (`bonusTrips`) are displayed separately. Missing or
+invalid counts are unknown, not zero. They are not added together or interpreted
+as remaining trips: the API's relationship between these counters is not verified.
+Reaching a reported quota limit alone does not prove that all extra trips are
+exhausted. Car availability still follows the reported `canDrive`, trip and block
+state, never a locally calculated quota total. Old snapshots that previously
+stored default zeros cannot recover missing values until a new successful read.
 The creator panel and old reward/claim counters have been removed. Suspension
 history and local persisted events are collapsed by default; the browser remembers
 each panel's open/closed state when storage is available. Events summarize saved
