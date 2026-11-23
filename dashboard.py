@@ -887,19 +887,22 @@ def creator_status_section(info):
     phase tracking, Jalali (Solar) time, and cycle statistics."""
     if info.get("enabled") is False:
         current = esc(str(info.get("current", 0)))
-        return f"""  <section class="creator-status" aria-label="ساخت خودکار اکانت‌ها">
-    <div class="creator-status__head">
-      <div class="creator-status__icon" aria-hidden="true">🏭</div>
-      <div class="creator-status__title">ساخت خودکار اکانت‌ها</div>
+        return f"""  <details id="accountCreatorPanel" class="creator-status status-panel" data-status-panel>
+    <summary class="creator-status__head status-panel__summary">
+      <span class="creator-status__icon" aria-hidden="true">🏭</span>
+      <span class="creator-status__title">ساخت خودکار اکانت‌ها</span>
       <span class="creator-status__badge creator-status__badge--idle">⛔ غیرفعال</span>
-    </div>
+      <span class="status-panel__chevron" aria-hidden="true">⌄</span>
+    </summary>
+    <div class="status-panel__body">
     <div class="creator-stat creator-stat--blue">
       <small>تعداد اکانت‌های موجود</small><b>{current}</b>
     </div>
     <p id="creatorStatusMsg" style="color:var(--muted);margin:16px 0 0;line-height:1.9">
       ساخت خودکار اکانت‌ها غیرفعال است. اکانت جدیدی به‌صورت خودکار ساخته نمی‌شود.
     </p>
-  </section>"""
+    </div>
+  </details>"""
 
     running = info.get("running", False)
     done = info.get("done", False)
@@ -962,12 +965,14 @@ def creator_status_section(info):
     interval_sec = interval % 60
     interval_str = f"{interval_min} دقیقه و {interval_sec} ثانیه" if interval_sec else f"{interval_min} دقیقه"
 
-    return f"""  <div class="creator-status">
-    <div class="creator-status__head">
-      <div class="creator-status__icon">🏭</div>
-      <div class="creator-status__title">ساخت خودکار اکانت‌ها</div>
+    return f"""  <details id="accountCreatorPanel" class="creator-status status-panel" data-status-panel>
+    <summary class="creator-status__head status-panel__summary">
+      <span class="creator-status__icon" aria-hidden="true">🏭</span>
+      <span class="creator-status__title">ساخت خودکار اکانت‌ها</span>
       {badge}
-    </div>
+      <span class="status-panel__chevron" aria-hidden="true">⌄</span>
+    </summary>
+    <div class="status-panel__body">
     {phase_badge_html}
     <div class="creator-stats">
       <div class="creator-stat creator-stat--green"><small> ساخته شده </small><b>{current}</b></div>
@@ -1020,7 +1025,8 @@ def creator_status_section(info):
         </div>
       </div>
     </div>
-  </div>"""
+    </div>
+  </details>"""
 
 
 def referral_faker_status_section():
@@ -1180,14 +1186,16 @@ def banned_accounts_section():
           </td></tr>"""
 
     return f"""
-  <section class="banned-status creator-status" aria-labelledby="bannedAccountsTitle">
-    <div class="creator-status__head">
-      <div class="creator-status__icon" aria-hidden="true">🚫</div>
-      <h2 id="bannedAccountsTitle" class="creator-status__title" style="margin:0">اکانت‌های بن‌شده</h2>
+  <details id="bannedAccountsPanel" class="banned-status creator-status status-panel" data-status-panel>
+    <summary class="creator-status__head status-panel__summary">
+      <span class="creator-status__icon" aria-hidden="true">🚫</span>
+      <span class="creator-status__title">اکانت‌های بن‌شده</span>
       <span class="creator-status__badge" style="color:var(--red);border:1px solid currentColor">
         {len(records)} اکانت بن‌شده
       </span>
-    </div>
+      <span class="status-panel__chevron" aria-hidden="true">⌄</span>
+    </summary>
+    <div class="status-panel__body">
     <p style="color:var(--muted);font-size:13px;line-height:1.9;margin:0 0 16px">
       بن‌های ثبت‌شده توسط سیستم، شامل اکانت‌های حذف‌شده از فهرست پردازش.
       خطای ورود به‌تنهایی در این بخش به معنی بن‌شدن نیست.
@@ -1205,7 +1213,8 @@ def banned_accounts_section():
         <tbody>{rows_html}</tbody>
       </table>
     </div>
-  </section>"""
+    </div>
+  </details>"""
 
 
 def render():
@@ -1641,6 +1650,31 @@ def render():
   .logline {{ white-space:pre-wrap; word-break:break-all; padding:1px 0; color:#a8b5d0; }}
   .neg {{ color:var(--red); }}
 
+  /* Native disclosures work with mouse, touch and keyboard, even without JS. */
+  details.status-panel {{ padding:0; }}
+  .status-panel > .status-panel__summary {{
+    padding:20px 28px; margin:0; cursor:pointer; list-style:none;
+    user-select:none; transition:background .15s;
+  }}
+  .status-panel__summary::-webkit-details-marker {{ display:none; }}
+  .status-panel__summary:hover {{ background:rgba(96,165,250,.06); }}
+  .status-panel__summary:focus-visible {{ outline:2px solid var(--blue); outline-offset:-4px; border-radius:var(--radius-lg); }}
+  .status-panel__summary .creator-status__title {{ min-width:120px; }}
+  .status-panel__body {{ padding:0 28px 24px; }}
+  .status-panel__chevron {{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:28px; height:28px; color:var(--muted); font-size:24px;
+    transition:transform .2s; margin-inline-start:auto;
+  }}
+  .status-panel[open] > summary .status-panel__chevron {{ transform:rotate(180deg); }}
+  @media (max-width:600px) {{
+    .status-panel > .status-panel__summary {{ padding:16px; gap:10px; }}
+    .status-panel__body {{ padding:0 16px 16px; }}
+  }}
+  @media (prefers-reduced-motion:reduce) {{
+    .status-panel__chevron {{ transition:none; }}
+  }}
+
   /* ---- Creator status panel ---- */
   .creator-status {{
     background:linear-gradient(150deg, var(--card), #0d1626);
@@ -1980,6 +2014,15 @@ def render():
     }}
     tryNext();
   }}
+  // Keep each account panel's disclosure state across automatic page refreshes.
+  document.querySelectorAll('details[data-status-panel]').forEach(function (panel) {{
+    var key = 'status_panel_open_' + panel.id;
+    try {{ panel.open = localStorage.getItem(key) === '1'; }} catch (e) {{}}
+    panel.addEventListener('toggle', function () {{
+      try {{ localStorage.setItem(key, panel.open ? '1' : '0'); }} catch (e) {{}}
+    }});
+  }});
+
   // Mission Center collapse/expand — state persists across the 30s refresh.
   function mcKey(sec) {{
     var id = sec.id || '';
