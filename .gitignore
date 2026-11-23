@@ -13,14 +13,20 @@ env/
 venv/
 .venv/
 
-# Data files (runtime state — not needed in repo)
-# accounts.json — will be recreated by account_creator
-# status.json — live runtime state
-# earnings.json — runtime earnings
-# banned_accounts.json — runtime BAN tracking
-# creator_status.json — live creator status
-# referral_faker_status.json — live referral faker status
-# email_account.json — local email config
+# Credentials and runtime state must never enter Git.
+.env
+.env.*
+!.env.example
+data/
+accounts.json
+email_account.json
+status.json
+earnings.json
+banned_accounts.json
+creator_status.json
+referral_faker_status.json
+proxy_state.json
+proxies.txt
 
 # System files
 *.service

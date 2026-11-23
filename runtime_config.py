@@ -1,4 +1,35 @@
-"""Runtime safety switches shared by services and the dashboard."""
+"""Fail-closed configuration. Secrets belong in Railway Variables, never Git."""
 
-# Account creation is disabled, including automatic referral accounts.
-ACCOUNT_CREATION_ENABLED = False
+import os
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+DATA_DIR = Path(os.environ.get('DATA_DIR', str(HERE / 'data'))).resolve()
+ACCOUNT_CREATION_ENABLED = False  # Removed, not configurable.
+AUTOMATIC_ACTIONS_ENABLED = False  # No start/rent/claim endpoints are permitted.
+
+
+def primary_username():
+    return os.environ.get('PRIMARY_ACCOUNT', '').strip()
+
+
+def monitoring_enabled():
+    # Enable only after obtaining permission to use the site's API.
+    return os.environ.get('SITE_MONITORING_ENABLED', '').lower() == 'true'
+
+
+def initialize_data():
+    import json
+    DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for name, value in {
+        'status.json': {'_meta': {}},
+        'earnings.json': {},
+        'banned_accounts.json': {'banned': []},
+    }.items():
+        path = DATA_DIR / name
+        try:
+            with path.open('x', encoding='utf-8') as stream:
+                json.dump(value, stream)
+            path.chmod(0o600)
+        except FileExistsError:
+            pass

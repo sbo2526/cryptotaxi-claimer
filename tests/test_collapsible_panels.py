@@ -51,7 +51,7 @@ class CollapsiblePanelTests(unittest.TestCase):
     def test_enabled_creator_is_native_disclosure(self):
         html = dashboard.creator_status_section({'enabled': True, 'running': True})
         self.assert_native_panel(html, 'accountCreatorPanel')
-        self.assertIn('creatorCountdown', html)
+        self.assertNotIn('creatorCountdown', html)
 
     def test_banned_accounts_is_native_disclosure(self):
         with patch.object(dashboard, 'banned_accounts_info', return_value=[]):

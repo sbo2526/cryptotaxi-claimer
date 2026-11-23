@@ -7,15 +7,18 @@ A tiny stdlib HTTP server that renders a polished live HTML dashboard from
 the claimer's files (status.json, accounts.json, claimer.log).
 
 - GET  /        -> dashboard HTML (auto-refresh every 30s)
-- POST /clear   -> clear all error counters/history from this moment on
+- Protected, read-only routes; no account-management or mutation endpoints.
 
 Usage:
   python3 dashboard.py [port]        # default 8080
 """
 
-from runtime_config import ACCOUNT_CREATION_ENABLED
+from runtime_config import DATA_DIR, primary_username, monitoring_enabled, initialize_data
 from ban_detection import is_ban_error, is_confirmed_ban_record
 
+import base64
+import binascii
+import hmac
 import html
 import json
 import os
@@ -31,16 +34,12 @@ from zoneinfo import ZoneInfo
 TZ = ZoneInfo("Asia/Tehran")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ACCOUNTS_FILE = os.path.join(HERE, "accounts.json")
-STATUS_FILE = os.path.join(HERE, "status.json")
-EARNINGS_FILE = os.path.join(HERE, "earnings.json")
-CREATOR_LOG = os.path.join(HERE, "creator.log")
-CREATOR_STATUS_FILE = os.path.join(HERE, "creator_status.json")
-BANNED_ACCOUNTS_FILE = os.path.join(HERE, "banned_accounts.json")
-REFERRAL_STATUS_FILE = os.path.join(HERE, "referral_faker_status.json")
-LOG_FILE = os.path.join(HERE, "claimer.log")
+STATUS_FILE = str(DATA_DIR / "status.json")
+EARNINGS_FILE = str(DATA_DIR / "earnings.json")
+BANNED_ACCOUNTS_FILE = str(DATA_DIR / "banned_accounts.json")
+LOG_FILE = str(DATA_DIR / "monitor.log")
 
-PORT = 8080
+PORT = int(os.environ.get("PORT", "8080"))
 if len(sys.argv) > 1:
     try:
         PORT = int(sys.argv[1])
@@ -71,11 +70,6 @@ def load_json(path, default):
             return json.load(f)
     except Exception:
         return default
-
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def tail_lines(path, n=30):
@@ -174,30 +168,6 @@ def level_badge(level):
     return "<span class='lvl lvl--err'>⛔ خطای اصلی</span>"
 
 
-def clear_errors():
-    """Reset error counters + recent errors for all accounts, and mark the log
-    so historical errors stop being shown from this moment on."""
-    status = load_json(STATUS_FILE, {})
-    cleared = 0
-    for user, a in status.items():
-        if user == "_meta" or not isinstance(a, dict):
-            continue
-        if a.get("errors_today") or a.get("recent_errors"):
-            cleared += 1
-        a["errors_today"] = 0
-        a["recent_errors"] = []
-    save_json(STATUS_FILE, status)
-    try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"\n{CLEAR_MARKER} errors cleared at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-    except Exception:
-        pass
-    return cleared
-
-
-# --------------------------------------------------------------------------- #
-# account management (dashboard panel: add / delete / edit accounts)
-# --------------------------------------------------------------------------- #
 def recent_errors_from_log():
     """Extract recent ERROR/WARNING lines per account from claimer.log.
     Only lines after the last ERRS-CLEARED marker are considered."""
@@ -271,7 +241,7 @@ def car_card(car):
         )
     else:
         countdown = (
-            "<div class='cd cd--idle'><div class='cd__row'><span class='cd__label'>✅ آماده برای استارت خودکار</span></div></div>"
+            "<div class='cd cd--idle'><div class='cd__row'><span class='cd__label'>⏸ آمادهٔ حرکت — استارت خودکار غیرفعال است</span></div></div>"
             if status == "idle" else
             f"<div class='cd cd--idle'><div class='cd__row'><span class='cd__label'>⏳ {esc(car.get('block_msg') or 'در انتظار اجازهٔ استارت / خارج از خدمت')}</span></div></div>"
         )
@@ -592,303 +562,14 @@ def account_features(a):
 
 
 def creator_status_info():
-    """Read creator_status.json (live, written every second by account_creator.py)
-    and fall back to creator.log parsing if the status file is unavailable."""
-    target = 100
-    current = len(active_accounts_info())
-    remaining = max(0, target - current)
-    pct = (current / target * 100) if target > 0 else 0
-
-    if not ACCOUNT_CREATION_ENABLED:
-        return {
-            "enabled": False, "running": False, "done": False,
-            "current": current, "target": target, "remaining": remaining,
-            "pct": pct, "phase": "disabled",
-            "message": "ساخت خودکار اکانت‌ها غیرفعال است",
-            "next_cycle_ts": None, "countdown_seconds": None,
-        }
-
-    # --- Primary source: creator_status.json (written live by account_creator) ---
-    status_data = load_json(CREATOR_STATUS_FILE, {})
-
-    if status_data:
-        running = status_data.get("status") == "running"
-        done = status_data.get("status") in ("shutdown",) or current >= target
-        phase = status_data.get("phase", "")
-        phase_label = status_data.get("phase_label", "—")
-        next_cycle_ts = status_data.get("next_cycle_at")
-        next_cycle_persian = status_data.get("next_cycle_persian", "—")
-        countdown_seconds = status_data.get("countdown_seconds")
-        last_registered = status_data.get("last_created_email") or "尚无"
-        last_registered_time = status_data.get("last_created_persian", "尚无")
-        last_action = phase_label if phase_label else "尚无 فعالیت"
-        last_action_time = status_data.get("updated_at_persian", "尚无")
-        last_cycle_info = status_data.get("cycle_label") or next_cycle_persian
-        errors = status_data.get("errors", 0)
-        last_error = status_data.get("last_error")
-        total_cycles = status_data.get("total_cycles", 0)
-        total_success = status_data.get("total_success", 0)
-        total_failed = status_data.get("total_failed", 0)
-        interval = status_data.get("interval", 300)
-        cycle_number = status_data.get("cycle_number", 0)
-        started_at = status_data.get("started_at_persian", "尚无")
-        elapsed = status_data.get("cycle_elapsed")
-
-        # Compute a live countdown from next_cycle_ts if present
-        live_countdown = None
-        if next_cycle_ts:
-            live_countdown = int(max(0, next_cycle_ts - time.time()))
-
-        if done:
-            message = "✅ ساخت اکانت کامل شد — به هدف رسید"
-        elif running:
-            if phase == "countdown" and countdown_seconds is not None:
-                message = f"⏳ منتظر دور بعدی — {countdown_seconds} ثانیه مانده"
-            elif phase == "cycle_starting":
-                message = "▶ دور ساخت اکانت شروع شد"
-            elif phase in ("preparing_device", "creating_email", "registering", "saving_account"):
-                message = f"🔄 در حال ساخت اکانت: {phase_label}"
-            elif phase == "cooling_down":
-                message = "⚠️ فاصله بین دورها"
-            else:
-                message = "🟢 در حال ساخت اکانت‌ها"
-        else:
-            message = "🟡 منتظرِ نوبت بعدی"
-
-        return {
-            "running": running,
-            "done": done,
-            "current": current,
-            "target": target,
-            "remaining": remaining,
-            "pct": pct,
-            "last_registered": last_registered,
-            "last_registered_time": last_registered_time,
-            "last_action": last_action,
-            "last_action_time": last_action_time,
-            "last_cycle_info": last_cycle_info,
-            "next_cycle_info": next_cycle_persian,
-            "next_cycle_ts": next_cycle_ts,
-            "errors": errors,
-            "last_error": last_error,
-            "message": message,
-            "phase": phase,
-            "phase_label": phase_label,
-            "countdown_seconds": countdown_seconds if countdown_seconds is not None else live_countdown,
-            "next_cycle_persian": next_cycle_persian,
-            "total_cycles": total_cycles,
-            "total_success": total_success,
-            "total_failed": total_failed,
-            "interval": interval,
-            "cycle_number": cycle_number,
-            "started_at": started_at,
-            "cycle_elapsed": elapsed,
-            "source": "status_file",
-        }
-
-    # --- Fallback: parse creator.log (old behavior) ---
-    last_registered = None
-    last_registered_time = None
-    last_action = None
-    last_action_time = None
-    last_cycle_info = None
-    next_cycle_info = None
-    next_cycle_ts = None  # absolute epoch timestamp for next cycle start
-    errors_count = 0
-    last_error_info = None
-
-    try:
-        with open(CREATOR_LOG, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()[-80:]
-    except Exception:
-        lines = []
-
-    import re
-
-    for line in lines:
-        line_stripped = line.strip()
-        # Extract the full timestamp prefix: "2026-11-22 14:12:34,567"
-        ts_part = line_stripped[:23] if len(line_stripped) >= 23 else line_stripped
-
-        # Parse the timestamp from the log line
-        ts_epoch = None
-        m_ts = re.match(r"(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})", ts_part)
-        if m_ts:
-            ts_epoch = datetime(*map(int, m_ts.groups()), tzinfo=TZ).timestamp()
-
-        # Check for successful registration — match on "Registered:" (robust to emoji encoding)
-        if "Registered:" in line_stripped:
-            # Extract name: text after "Registered:" up to first space
-            marker_idx = line_stripped.find("Registered:")
-            after = line_stripped[marker_idx + len("Registered:"):].strip()
-            name = after.split(" ")[0] if after else None
-            # Extract email from parentheses if present
-            email = None
-            if "(" in after and ")" in after:
-                email = after[after.find("(") + 1:after.find(")")]
-            last_registered = name or email
-            last_registered_time = ts_part
-            last_action = f"✅ ساخت اکانت: {last_registered}"
-            last_action_time = ts_part
-        # Check for added to accounts.json
-        elif "Added to accounts.json:" in line_stripped:
-            marker_idx = line_stripped.find("Added to accounts.json:")
-            after = line_stripped[marker_idx + len("Added to accounts.json:"):].strip()
-            last_action = f"📝 اضافه شد به لیست: {after}"
-            last_action_time = ts_part
-        # Check for cycle start
-        elif "Cycle:" in line_stripped and "/100" in line_stripped:
-            last_cycle_info = line_stripped.split("] ", 1)[-1] if "] " in line_stripped else line_stripped
-            last_action = last_cycle_info
-            last_action_time = ts_part
-        # Check for cycle complete
-        elif "Cycle complete:" in line_stripped:
-            last_cycle_info = line_stripped.split("] ", 1)[-1] if "] " in line_stripped else line_stripped
-            last_action = f"✅ دورهٔ کامل شد: {last_cycle_info}"
-            last_action_time = ts_part
-        # Check for sleeping / next cycle — extract the sleep duration
-        elif "Sleeping" in line_stripped and "s until next cycle" in line_stripped:
-            next_cycle_info = line_stripped.split("] ", 1)[-1] if "] " in line_stripped else line_stripped
-            # Extract sleep seconds: "Sleeping 310s until next cycle"
-            m_sleep = re.search(r"Sleeping\s+(\d+)s\s+until next cycle", line_stripped)
-            if m_sleep and ts_epoch is not None:
-                sleep_seconds = int(m_sleep.group(1))
-                next_cycle_ts = ts_epoch + sleep_seconds
-            last_action = next_cycle_info
-            last_action_time = ts_part
-        # Check for email creation failure
-        elif "Email creation failed" in line_stripped:
-            errors_count += 1
-            last_error_info = line_stripped
-        # Check for registration failure
-        elif "Registration failed" in line_stripped:
-            errors_count += 1
-            last_error_info = line_stripped
-        # Check for creator started
-        elif "Account Creator started" in line_stripped:
-            last_action = "🚀 creator شروع شد"
-            last_action_time = ts_part
-        # Check for target reached / shutdown
-        elif "Target reached" in line_stripped or "shutting down" in line_stripped:
-            return {
-                "running": False,
-                "done": True,
-                "current": current,
-                "target": target,
-                "remaining": 0,
-                "pct": 100.0,
-                "last_registered": last_registered,
-                "last_registered_time": last_registered_time,
-                "last_action": last_action,
-                "last_action_time": last_action_time,
-                "last_cycle_info": last_cycle_info,
-                "next_cycle_info": next_cycle_info,
-                "next_cycle_ts": next_cycle_ts,
-                "errors": errors_count,
-                "last_error": last_error_info,
-                "message": "✅ ساخت اکانت کامل شد — به هدف رسید",
-                "phase": "done",
-                "phase_label": "✅ تکمیل شد",
-                "countdown_seconds": 0,
-                "next_cycle_persian": "—",
-                "total_cycles": 0,
-                "total_success": 0,
-                "total_failed": 0,
-                "interval": 300,
-                "cycle_number": 0,
-                "started_at": "尚无",
-                "cycle_elapsed": 0,
-                "source": "log_fallback",
-            }
-
-    # Determine if creator is running by checking if it's a recent log entry
-    now_ts = time.time()
-    try:
-        last_ts = 0
-        for line in lines:
-            ts_str = line.strip().split(" ")[0]
-            try:
-                import re
-                m = re.match(r"(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})", ts_str)
-                if m:
-                    last_ts = datetime(*map(int, m.groups()), tzinfo=TZ).timestamp()
-            except Exception:
-                pass
-        age_minutes = (now_ts - last_ts) / 60 if last_ts > 0 else 0
-        running = age_minutes < 15
-    except Exception:
-        running = True
-
-    if current >= target:
-        return {
-            "running": False,
-            "done": True,
-            "current": current,
-            "target": target,
-            "remaining": 0,
-            "pct": 100.0,
-            "last_registered": last_registered,
-            "last_registered_time": last_registered_time,
-            "last_action": last_action,
-            "last_action_time": last_action_time,
-            "last_cycle_info": last_cycle_info,
-            "next_cycle_info": next_cycle_info,
-            "next_cycle_ts": next_cycle_ts,
-            "errors": errors_count,
-            "last_error": last_error_info,
-            "message": "✅ ساخت اکانت کامل شد — به هدف رسید",
-            "phase": "done",
-            "phase_label": "✅ تکمیل شد",
-            "countdown_seconds": 0,
-            "next_cycle_persian": "—",
-            "total_cycles": 0,
-            "total_success": 0,
-            "total_failed": 0,
-            "interval": 300,
-            "cycle_number": 0,
-            "started_at": "尚无",
-            "cycle_elapsed": 0,
-            "source": "log_fallback",
-        }
-
-    return {
-        "running": running,
-        "done": False,
-        "current": current,
-        "target": target,
-        "remaining": remaining,
-        "pct": pct,
-        "last_registered": last_registered,
-        "last_registered_time": last_registered_time,
-        "last_action": last_action,
-        "last_action_time": last_action_time,
-        "last_cycle_info": last_cycle_info,
-        "next_cycle_info": next_cycle_info,
-        "next_cycle_ts": next_cycle_ts,
-        "errors": errors_count,
-        "last_error": last_error_info,
-        "message": "🟢 در حال ساخت اکانت‌ها" if running else "🟡 منتظرِ نوبت بعدی",
-        "phase": "",
-        "phase_label": "",
-        "countdown_seconds": None,
-        "next_cycle_persian": "—",
-        "total_cycles": 0,
-        "total_success": 0,
-        "total_failed": 0,
-        "interval": 300,
-        "cycle_number": 0,
-        "started_at": "尚无",
-        "cycle_elapsed": 0,
-        "source": "log_fallback",
-    }
+    return {"enabled": False, "running": False, "done": False,
+            "current": len(active_accounts_info()), "next_cycle_ts": None,
+            "message": "ساخت اکانت حذف شده است؛ عملیات خودکار غیرفعال است"}
 
 
 def creator_status_section(info):
-    """HTML section for the account-creator status panel with live countdown,
-    phase tracking, Jalali (Solar) time, and cycle statistics."""
-    if info.get("enabled") is False:
-        current = esc(str(info.get("current", 0)))
-        return f"""  <details id="accountCreatorPanel" class="creator-status status-panel" data-status-panel>
+    current = esc(str(info.get("current", 0)))
+    return f"""<details id="accountCreatorPanel" class="creator-status status-panel" data-status-panel>
     <summary class="creator-status__head status-panel__summary">
       <span class="creator-status__icon" aria-hidden="true">🏭</span>
       <span class="creator-status__title">ساخت خودکار اکانت‌ها</span>
@@ -896,210 +577,10 @@ def creator_status_section(info):
       <span class="status-panel__chevron" aria-hidden="true">⌄</span>
     </summary>
     <div class="status-panel__body">
-    <div class="creator-stat creator-stat--blue">
-      <small>تعداد اکانت‌های موجود</small><b>{current}</b>
+      <div class="creator-stat creator-stat--blue"><small>تعداد اکانت‌های موجود</small><b>{current}</b></div>
+      <p>ساخت اکانت و ریفرال جعلی حذف شده است. استارت، اجاره و دریافت جایزهٔ خودکار غیرفعال است.</p>
     </div>
-    <p id="creatorStatusMsg" style="color:var(--muted);margin:16px 0 0;line-height:1.9">
-      ساخت خودکار اکانت‌ها غیرفعال است. اکانت جدیدی به‌صورت خودکار ساخته نمی‌شود.
-    </p>
-    </div>
-  </details>"""
-
-    running = info.get("running", False)
-    done = info.get("done", False)
-    current = info.get("current", 0)
-    target = info.get("target", 100)
-    remaining = info.get("remaining", 0)
-    pct = info.get("pct", 0)
-    last_reg = info.get("last_registered") or "尚无"
-    last_reg_time = info.get("last_registered_time") or "尚无"
-    last_action = info.get("last_action") or "尚无 فعالیت"
-    last_action_time = info.get("last_action_time") or "尚无"
-    last_cycle = info.get("last_cycle_info") or "尚无"
-    next_cycle = info.get("next_cycle_info") or "尚无"
-    next_cycle_ts = info.get("next_cycle_ts")
-    errors = info.get("errors", 0)
-    last_error = info.get("last_error")
-    message = info.get("message", "")
-    phase = info.get("phase", "")
-    phase_label = info.get("phase_label", "")
-    countdown_seconds = info.get("countdown_seconds")
-    total_cycles = info.get("total_cycles", 0)
-    total_success = info.get("total_success", 0)
-    total_failed = info.get("total_failed", 0)
-    interval = info.get("interval", 300)
-    cycle_number = info.get("cycle_number", 0)
-    started_at = info.get("started_at", "尚无")
-    cycle_elapsed = info.get("cycle_elapsed")
-
-    if done:
-        badge = "<span class='creator-status__badge creator-status__badge--done'>✅ تکمیل شد</span>"
-    elif running:
-        badge = "<span class='creator-status__badge creator-status__badge--active'><span class='dot' style='width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite'></span> در حال اجرا</span>"
-    else:
-        badge = "<span class='creator-status__badge creator-status__badge--idle'>🟡 منتظر</span>"
-
-    pct_str = f"{pct:.1f}%"
-    bar_width = f"{pct:.1f}%"
-
-    action_html = f"<b>{esc(last_action)}</b> — {esc(last_action_time)}"
-    reg_html = f"<b>{esc(last_reg)}</b> ({esc(last_reg_time)})" if last_reg != "尚无" else "尚无 اکانت ساخته‌شده"
-
-    phase_badge_html = ""
-    if phase and phase_label and phase != "done":
-        phase_badge_html = f'<div style="margin-bottom:8px"><span class="creator-phase-badge">{esc(phase_label)}</span></div>'
-
-    countdown_html = "—"
-    if next_cycle_ts:
-        initial_count = countdown_seconds if countdown_seconds is not None else "—"
-        countdown_html = f'<span id="creatorCountdown" data-target="{next_cycle_ts}">{esc(str(initial_count))}</span>'
-    elif countdown_seconds is not None:
-        countdown_html = f'<span id="creatorCountdown" data-target="">{esc(str(countdown_seconds))}</span>'
-    else:
-        countdown_html = '<span id="creatorCountdown" data-target="">—</span>'
-
-    cycle_info_html = ""
-    if total_cycles > 0 or cycle_number > 0:
-        cycle_info_html = f"دور #{cycle_number} | کل دورها: {total_cycles} | موفق: {total_success} | ناموفق: {total_failed}"
-
-    interval_min = interval // 60 if interval else 5
-    interval_sec = interval % 60
-    interval_str = f"{interval_min} دقیقه و {interval_sec} ثانیه" if interval_sec else f"{interval_min} دقیقه"
-
-    return f"""  <details id="accountCreatorPanel" class="creator-status status-panel" data-status-panel>
-    <summary class="creator-status__head status-panel__summary">
-      <span class="creator-status__icon" aria-hidden="true">🏭</span>
-      <span class="creator-status__title">ساخت خودکار اکانت‌ها</span>
-      {badge}
-      <span class="status-panel__chevron" aria-hidden="true">⌄</span>
-    </summary>
-    <div class="status-panel__body">
-    {phase_badge_html}
-    <div class="creator-stats">
-      <div class="creator-stat creator-stat--green"><small> ساخته شده </small><b>{current}</b></div>
-      <div class="creator-stat creator-stat--gold"><small> هدف نهایی </small><b>{target}</b></div>
-      <div class="creator-stat creator-stat--blue"><small> باقی مانده </small><b>{remaining}</b></div>
-      <div class="creator-stat {'creator-stat--red' if errors else 'creator-stat--green'}"><small> خطاها </small><b>{errors}</b></div>
-    </div>
-    <div class="creator-progress">
-      <div class="creator-progress__bar">
-        <div class="creator-progress__fill" id="creatorFill" style="width:{bar_width}"></div>
-      </div>
-      <div class="creator-progress__txt">
-        <span><b>{current}</b> از <b>{target}</b> اکانت</span>
-        <span>{pct_str} تکمیل شد</span>
-      </div>
-      <div class="creator-progress__timer">
-        <div style="display:flex;flex-direction:column;gap:8px;width:100%">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span class="creator-progress__timer-label"> ⏰ تا شروع چرخه بعدی </span>
-            <span class="creator-progress__timer-val" id="creatorCountdownWrap" style="font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--blue)">{countdown_html}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span class="creator-progress__timer-label"> زمان شروع دور بعدی </span>
-            <span class="creator-progress__timer-val" style="font-size:13px;text-align:right;color:var(--muted)">{esc(next_cycle)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span class="creator-progress__timer-label"> آخرین اکانت ساخته‌شده </span>
-            <span class="creator-progress__timer-val" id="creatorRegInfo" style="font-size:14px;text-align:right">{reg_html}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span class="creator-progress__timer-label"> فاز فعلی / عمل انجام‌شده </span>
-            <span class="creator-progress__timer-val" id="creatorActionInfo" style="font-size:14px;text-align:right">{action_html}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span class="creator-progress__timer-label"> وضعیت فعلی </span>
-            <span class="creator-progress__timer-val" id="creatorStatusMsg" style="font-size:14px;text-align:right">{esc(message)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span class="creator-progress__timer-label"> اطلاعات چرخه </span>
-            <span class="creator-progress__timer-val" id="creatorCycleInfo" style="font-size:12px;text-align:right;color:var(--muted)">{esc(cycle_info_html)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span class="creator-progress__timer-label"> interval </span>
-            <span class="creator-progress__timer-val" style="font-size:12px;text-align:right;color:var(--muted)">{esc(interval_str)}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span class="creator-progress__timer-label"> زمان راه‌اندازی </span>
-            <span class="creator-progress__timer-val" style="font-size:12px;text-align:right;color:var(--muted)">{esc(started_at)}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    </div>
-  </details>"""
-
-
-def referral_faker_status_section():
-    """HTML section showing referral faker status (dormant/active)."""
-    if not ACCOUNT_CREATION_ENABLED:
-        return ""
-    data = load_json(REFERRAL_STATUS_FILE, {})
-    if not data:
-        return ""
-
-    status = data.get("status", "unknown")
-    main_account = data.get("main_account", "—")
-    trigger_count = data.get("trigger_count", 100)
-    current_count = data.get("current_referral_count", 0)
-    triggered = data.get("triggered", False)
-    phase_label = data.get("phase_label", "—")
-    total_fakes = data.get("total_fakes_created", 0)
-    staging_day = data.get("staging_day", 0)
-    staging_days = data.get("staging_days", 8)
-    updated = data.get("updated_at_persian", "尚无")
-
-    if status == "dormant":
-        badge = "<span style='padding:6px 14px;border-radius:999px;font-size:12.5px;font-weight:600;background:rgba(251,146,60,.12);color:var(--orange);border:1px solid rgba(251,146,60,.3)'>⏳ در انتظار فعال‌سازی</span>"
-        bar_pct = min(100, (current_count / trigger_count * 100) if trigger_count > 0 else 0)
-    elif status == "active":
-        badge = "<span style='padding:6px 14px;border-radius:999px;font-size:12.5px;font-weight:600;background:rgba(52,211,153,.12);color:var(--green);border:1px solid rgba(52,211,153,.3)'><span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite'></span> در حال اجرا</span>"
-        bar_pct = 50 + (staging_day / staging_days * 50) if staging_days > 0 else 50
-    elif status == "stopped":
-        badge = "<span style='padding:6px 14px;border-radius:999px;font-size:12.5px;font-weight:600;background:rgba(248,113,113,.12);color:var(--red);border:1px solid rgba(248,113,113,.3)'>⛔ متوقف شد</span>"
-        bar_pct = 0
-    else:
-        badge = "<span style='padding:6px 14px;border-radius:999px;font-size:12.5px;font-weight:600;background:rgba(96,165,250,.12);color:var(--blue);border:1px solid rgba(96,165,250,.3)'>🟡 ناشناخته</span>"
-        bar_pct = 0
-
-    return f"""
-  <div class="referral-faker" style="background:linear-gradient(145deg, var(--card), var(--card2));border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:28px;box-shadow:var(--shadow)">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <div style="font-size:28px">🔗</div>
-      <div style="flex:1">
-        <div style="font-size:17px;font-weight:600">ساخت ركال‌های فيك (تراز ۲)</div>
-        <div style="font-size:12.5px;color:var(--muted);margin-top:2px">در صورت رسیدن اكانت اصلی به ۱۰۰ ركال، خودكار ركال‌های فيك برای هر ركال واقعی ساخته می‌شود</div>
-      </div>
-      {badge}
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px">
-      <div style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> اكانت اصلی </small>
-        <b style="font-size:14px;font-weight:600">{esc(main_account)}</b>
-      </div>
-      <div style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> ركال‌های الان </small>
-        <b style="font-size:22px;font-weight:700;color:var(--blue)">{current_count}</b>
-        <small style="color:var(--muted);display:block">از {trigger_count}</small>
-      </div>
-      <div style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> ركال‌های فيك ساخته‌شده </small>
-        <b style="font-size:22px;font-weight:700;color:var(--green)">{total_fakes}</b>
-      </div>
-      <div style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> روز توزيع </small>
-        <b style="font-size:14px;font-weight:600">{staging_day + 1}/{staging_days}</b>
-      </div>
-    </div>
-    <div class="creator-progress__bar" style="margin-bottom:10px">
-      <div class="creator-progress__fill" style="width:{bar_pct:.1f}%;background:linear-gradient(90deg, var(--orange), var(--gold))"></div>
-    </div>
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <span style="font-size:13px;color:var(--muted)"> فاز فعلی: {esc(phase_label)} </span>
-      <span style="font-size:12px;color:var(--faint)"> آپدیت: {esc(updated)} </span>
-    </div>
-  </div>
-"""
+    </details>"""
 
 
 def banned_accounts_info():
@@ -1157,22 +638,12 @@ def banned_accounts_info():
 
 
 def active_accounts_info():
-    """The active list is accounts.json, never resurrect old status-only users."""
-    accounts = load_json(ACCOUNTS_FILE, [])
-    if not isinstance(accounts, list):
+    """Only explicitly selected primary identity; no credential files or status ghosts."""
+    user = primary_username()
+    if not user:
         return []
     banned = {entry["username"] for entry in banned_accounts_info() if entry["confirmed"]}
-    active = []
-    seen = set()
-    for account in accounts:
-        if not isinstance(account, dict):
-            continue
-        user = account.get("username")
-        if not isinstance(user, str) or not user or user in banned or user in seen:
-            continue
-        active.append(account)
-        seen.add(user)
-    return active
+    return [] if user in banned else [{"username": user}]
 
 
 def banned_accounts_section():
@@ -1771,7 +1242,7 @@ def render():
       <div class="header-logo">🚕</div>
       <div>
         <h1>Crypto Taxi <span class="accent">— Dashboard</span></h1>
-        <div class="header-sub">وضعیت زنده اکانت‌ها و تاکسی‌ها · اولویت رنت · استارت خودکار پس از پایان سفر</div>
+        <div class="header-sub">حالت امن و فقط‌خواندنی · بدون استارت، اجاره یا دریافت جایزهٔ خودکار</div>
       </div>
     </div>
     <div class="header-right">
@@ -1784,7 +1255,7 @@ def render():
   </div>
 </header>
 <div class="toolbar">
-  <button class="clear-btn" id="clearBtn">🧹 پاک کردن خراها — از این لحظه صفر شود</button>
+  <p>⏸ عملیات خودکار متوقف است. پایش خارجی هم تا فعال‌سازی صریح در تنظیمات خاموش می‌ماند.</p>
 </div>
 <main>
   <div class="summary">
@@ -1798,7 +1269,6 @@ def render():
 
   {creator_status_section(creator_info)}
 
-  {referral_faker_status_section()}
 
 
   {banned_accounts_section()}
@@ -1856,77 +1326,6 @@ def render():
     }}
     setInterval(checkCount, 10000);
 
-    // Live-update the creator status panel every 10s without page reload.
-    // Fetches /creator-status and updates the progress bar, counts, timer.
-    var creatorNextCycleTs = 0; // epoch ms for next cycle start
-
-    function formatCountdown(ms) {{
-      if (ms <= 0) return '🚀 شروع شد';
-      var total = Math.floor(ms / 1000);
-      var m = Math.floor(total / 60);
-      var s = total % 60;
-      return m + ':' + (s < 10 ? '0' + s : s) + ' دقیقه';
-    }}
-
-    function updateCreatorCountdown() {{
-      var el = document.getElementById('creatorCountdown');
-      var wrap = document.getElementById('creatorCountdownWrap');
-      if (!el || !wrap) return;
-      if (!creatorNextCycleTs) {{
-        el.textContent = '—';
-        wrap.style.color = 'var(--muted)';
-        return;
-      }}
-      var diff = creatorNextCycleTs - Date.now();
-      if (diff > 0) {{
-        el.textContent = formatCountdown(diff);
-        wrap.style.color = diff < 30000 ? 'var(--orange)' : 'var(--blue)';
-      }} else {{
-        el.textContent = '🚀 شروع شد';
-        wrap.style.color = 'var(--green)';
-      }}
-    }}
-
-    function updateCreatorStatus() {{
-      fetch('/creator-status', {{ cache: 'no-store' }})
-        .then(function (r) {{ return r.json(); }})
-        .then(function (j) {{
-          if (!j || !j.ok) return;
-          var fill = document.getElementById('creatorFill');
-          var msg = document.getElementById('creatorStatusMsg');
-          var regInfo = document.getElementById('creatorRegInfo');
-          var actionInfo = document.getElementById('creatorActionInfo');
-          var cycleInfo = document.getElementById('creatorCycleInfo');
-          if (fill) fill.style.width = (j.pct || 0) + '%';
-          // Update next cycle timestamp for countdown
-          creatorNextCycleTs = j.enabled !== false && j.next_cycle_ts
-            ? j.next_cycle_ts * 1000 : 0; // reset stale countdown when disabled
-          if (msg) {{
-            msg.textContent = j.message || '';
-            msg.style.color = j.done ? 'var(--gold)' : (j.running ? 'var(--green)' : 'var(--blue)');
-          }}
-          if (regInfo) {{
-            var reg = j.last_registered || '尚无';
-            var regT = j.last_registered_time || '尚无';
-            regInfo.innerHTML = '<b>' + reg + '</b> (' + regT + ')';
-          }}
-          if (actionInfo) {{
-            var act = j.last_action || '尚无 فعالیت';
-            var actT = j.last_action_time || '尚无';
-            actionInfo.innerHTML = '<b>' + act + '</b> — ' + actT;
-          }}
-          if (cycleInfo) {{
-            cycleInfo.textContent = j.next_cycle_info || '尚无';
-          }}
-          // Immediately update countdown with new data
-          updateCreatorCountdown();
-        }})
-        .catch(function () {{}});
-    }}
-    updateCreatorStatus();
-    setInterval(updateCreatorStatus, 10000);
-    // Smooth countdown — update every second
-    setInterval(updateCreatorCountdown, 1000);
   }})();
 
   // click an error row to expand/collapse its full detail
@@ -1936,96 +1335,6 @@ def render():
       if (d && d.classList.contains('err__detail')) d.classList.toggle('open');
     }});
   }});
-  // clear all errors from this moment on — same proxy-safe transport as
-  // the account management actions (try POST /, then header GET, then query)
-  var clearBtn = document.getElementById('clearBtn');
-  if (clearBtn) {{
-    clearBtn.addEventListener('click', function () {{
-      if (!confirm('✅ خراها از این لحظه پاک و صفر شوند؟')) return;
-      clearBtn.disabled = true;
-      clearBtn.textContent = '…در حال پاک کردن';
-      requestAction('clear', {{}});
-    }});
-  }}
-  // ---- account management panel ----
-  // The sandbox preview proxy only forwards the exact root path "/" and
-  // answers any other path/query/headers-blocked request itself ("Not
-  // found: ..."). So the requestAction helper tries several transport
-  // forms on the root path, in order, until the dashboard answers with
-  // JSON. A non-JSON answer means the request never reached the
-  // dashboard and the next form is tried; a JSON answer (ok or error)
-  // is final.
-  function parseJsonResponse(r) {{
-    return r.text().then(function (text) {{
-      try {{ return JSON.parse(text); }}
-      catch (e) {{ throw new Error('پاسخ سرور JSON نبود: ' + text.slice(0, 200)); }}
-    }});
-  }}
-  function requestAction(action, params) {{
-    var body = JSON.stringify({{
-      action: action,
-      username: params.username || '',
-      password: params.password || '',
-      old: params.old || ''
-    }});
-    var attempts = [
-      // 1) POST /clear — dedicated path, most likely to pass through proxies
-      function () {{
-        return fetch('/clear', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify({{ action: action }})
-        }});
-      }},
-      // 2) GET /clear — dedicated path, no body needed for clear
-      function () {{
-        return fetch('/clear', {{ method: 'GET' }});
-      }},
-      // 3) POST "/" with a JSON body (fallback)
-      function () {{
-        return fetch('/', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          body: body
-        }});
-      }},
-      // 4) GET "/" with custom headers (action carried in headers)
-      function () {{
-        return fetch('/', {{
-          method: 'GET',
-          headers: {{
-            'X-D-Action': action,
-            'X-D-Username': params.username || '',
-            'X-D-Password': params.password || '',
-            'X-D-Old': params.old || ''
-          }}
-        }});
-      }},
-      // 5) GET "/?action=..." with query params (plain localhost fallback)
-      function () {{
-        var qs = Object.keys(params).map(function (k) {{
-          return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
-        }}).join('&');
-        return fetch('/?action=' + encodeURIComponent(action) + (qs ? '&' + qs : ''), {{ method: 'GET' }});
-      }}
-    ];
-    var idx = 0;
-    function tryNext() {{
-      if (idx >= attempts.length) {{
-        alert('⚠ همه روش‌ها با خطا مواجه شد — ممکن است درخواست توسط لایه میانه (proxy) مسدود شده باشد.');
-        return;
-      }}
-      var attempt = attempts[idx++];
-      attempt()
-        .then(parseJsonResponse)
-        .then(function (j) {{
-          if (j.ok) {{ location.reload(); }}
-          else {{ alert('⚠ ' + (j.error || 'خطا در انجام عملیات')); }}
-        }})
-        .catch(function () {{ tryNext(); }});
-    }}
-    tryNext();
-  }}
   // Keep each account panel's disclosure state across automatic page refreshes.
   document.querySelectorAll('details[data-status-panel]').forEach(function (panel) {{
     var key = 'status_panel_open_' + panel.id;
@@ -2072,98 +1381,65 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def authorized(self):
+        user = os.environ.get("DASHBOARD_USER", "")
+        password = os.environ.get("DASHBOARD_PASSWORD", "")
+        if not user or len(password) < 16:
+            self.send_json({"ok": False, "error": "Configure dashboard access in Railway Variables"}, status=503)
+            return False
+        try:
+            scheme, encoded = self.headers.get("Authorization", "").split(" ", 1)
+            if scheme.lower() != "basic":
+                raise ValueError()
+            supplied_user, supplied_password = base64.b64decode(encoded, validate=True).decode("utf-8").split(":", 1)
+            valid_user = hmac.compare_digest(supplied_user.encode(), user.encode())
+            valid_password = hmac.compare_digest(supplied_password.encode(), password.encode())
+            if valid_user and valid_password:
+                return True
+        except (ValueError, UnicodeError, binascii.Error):
+            pass
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Private dashboard", charset="UTF-8"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return False
+
     def do_GET(self):
-        parsed = urlparse(self.path)
-        qs = parse_qs(parsed.query)
-
-        # Only the "clear" action is served on the root path (for the
-        # clear-errors button). Account management (add/update/delete) is
-        # removed — accounts are edited directly in accounts.json.
-        header_action = self.headers.get("X-D-Action")
-        action = header_action or qs.get("action", [None])[0]
-
-        if parsed.path in ("/", "/index.html") and action == "clear":
-            try:
-                cleared = clear_errors()
-                self.send_json({"ok": True, "cleared": cleared})
-            except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, status=500)
+        path = urlparse(self.path).path
+        if path == "/healthz":
+            self.send_json({"ok": True})  # Static liveness only; never account/config data.
             return
-
-        # Dedicated GET /clear path — more likely to pass through preview
-        # proxies than root-path query params or custom headers.
-        if parsed.path == "/clear":
-            try:
-                cleared = clear_errors()
-                self.send_json({"ok": True, "cleared": cleared})
-            except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, status=500)
+        if not self.authorized():
             return
-
-        # Lightweight account-count endpoint for JS auto-refresh detection.
-        # The dashboard JS polls this every 10s; additions and ban/removal
-        # changes reload the cards and every displayed account count.
-        if parsed.path == "/count":
-            try:
-                count = len(active_accounts_info())
-                self.send_json({"ok": True, "count": count})
-            except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, status=500)
-            return
-
-        # Lightweight creator-status endpoint — returns the same info as
-        # creator_status_section but as JSON, for live JS updates without
-        # a full page reload. Dashboard JS polls this every 10s.
-        if parsed.path == "/creator-status":
-            try:
+        try:
+            if path == "/count":
+                self.send_json({"ok": True, "count": len(active_accounts_info())})
+            elif path == "/creator-status":
                 self.send_json(creator_status_info())
-            except Exception as e:
-                self.send_json({"ok": False, "error": str(e)}, status=500)
-            return
-
-        if self.path in ("/", "/index.html"):
-            body = render().encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
-        self.send_json({"ok": False, "error": "Not found"}, status=404)
-
-    def do_POST(self):
-        # JSON body reader
-        length = int(self.headers.get("Content-Length", 0) or 0)
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            data = json.loads(raw.decode("utf-8") or "{}")
-        except Exception:
-            data = {}
-
-        try:
-            # Only the "clear" action is served now. Account management
-            # (add/update/delete) is removed — accounts are edited directly
-            # in accounts.json (the claimer hot-reloads it every sweep).
-            action = data.get("action")
-            if action and self.path in ("/", "/index.html") and action == "clear":
-                cleared = clear_errors()
-                self.send_json({"ok": True, "cleared": cleared})
-                return
-            if self.path == "/clear":
-                cleared = clear_errors()
-                self.send_json({"ok": True, "cleared": cleared})
+            elif path in ("/", "/index.html"):
+                body = render().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
             else:
                 self.send_json({"ok": False, "error": "Not found"}, status=404)
-        except Exception as e:
-            self.send_json({"ok": False, "error": str(e)}, status=500)
+        except Exception:
+            self.send_json({"ok": False, "error": "Unable to read dashboard state"}, status=500)
+
+    def do_POST(self):
+        if self.authorized():
+            self.send_json({"ok": False, "error": "Read-only dashboard"}, status=405)
 
     def log_message(self, fmt, *args):
-        print("[dashboard] " + fmt % args)
+        pass  # Do not log query strings, authorization attempts or user input.
 
 
 if __name__ == "__main__":
+    initialize_data()
     print(f"Dashboard serving on http://0.0.0.0:{PORT}")
     httpd = HTTPServer(("0.0.0.0", PORT), Handler)
     try:

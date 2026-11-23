@@ -1,19 +1,11 @@
 FROM python:3.11-slim
-
 WORKDIR /app
-
-# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy project source files (including any optional proxies.txt / *.sh / *.json present)
-COPY . .
-
-# Create initial data files if they don't exist
-RUN python3 init_data.py
-
-# Expose dashboard port
+# Explicit source allowlist: no Git history, secrets, legacy JSON or local backups.
+COPY claimer.py dashboard.py supervisor.py runtime_config.py ban_detection.py monitor_safety.py ./
+RUN useradd --create-home --uid 10001 app && mkdir -p /app/data && chown app:app /app/data
+USER app
+ENV DATA_DIR=/app/data
 EXPOSE 8080
-
-# Start supervisor — it manages claimer, account_creator, dashboard, referral_faker
-CMD ["python3", "supervisor.py", "--monitor-interval", "30"]
+CMD ["python3", "supervisor.py"]

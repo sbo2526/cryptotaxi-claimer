@@ -1,86 +1,121 @@
-# Crypto Taxi — Multi-Account Claimer
+# Crypto Taxi — protected, opt-in read-only monitor
 
-Automated multi-account claimer for [thecryptotaxi.com](https://thecryptotaxi.com).
+## Safety defaults
 
-## What it does
+- **All website traffic is OFF by default.** The supervisor starts only the dashboard.
+- Registration, fake referrals, disposable-email creation, proxy rotation, trip
+  starts, rentals and reward claims have been removed. There is no environment
+  switch to re-enable mutation endpoints.
+- The only external endpoints implemented are `auth/login` and `state`. Reading
+  a website/API may also require permission: obtain that permission before opt-in.
+- Only `PRIMARY_ACCOUNT`, explicitly set in the environment, may authenticate.
+  No account credentials are loaded from JSON or selected from old status data.
+- The monitor never automatically restarts after suspension, access denial,
+  network failure, malformed state or loss of lock ownership.
+- Shared PostgreSQL ownership is required BEFORE any external request. All
+  deployments for the primary account must use the **same database**.
+- No hidden transport retries, redirects, proxy switching or repeated login.
+  Requests are paced at least 60 seconds apart; state polling is every 5 minutes
+  after each completed poll. These are conservative defaults, NOT a guarantee of
+  site approval or immunity from suspension.
+- 429/503 respect numeric or HTTP-date `Retry-After` with at least a 5-minute
+  cooldown. The same request is not immediately reissued. A rate-limited login
+  stops for manual review. Generic 401/403 stop the worker, but are NOT recorded
+  as an account ban. Explicit suspension stops the client immediately, closes the
+  session and records a persistent suspension marker in the shared database and
+  local archive. Future starts refuse it, even after a container is replaced.
+  The request budget and server cooldown are also stored in the shared database.
 
-| Service | Description |
+## Railway setup (secrets go in Variables, NEVER chat or Git)
+
+### Required for the dashboard
+
+| Variable | Purpose |
 |---|---|
-| **Claimer** | Periodically sweeps all accounts — starts trips, claims missions, and claims referral trips |
-| **Account Creator** | Disabled — automatic account creation is turned off |
-| **Dashboard** | Web dashboard on port 8080 with live stats, countdown timers, and per-account tables |
-| **Referral Faker** | Disabled — automatic referral account creation is turned off |
-| **Supervisor** | Monitors all services, auto-restarts on crash, rotates logs |
+| `DASHBOARD_USER` | Your private dashboard login name |
+| `DASHBOARD_PASSWORD` | Unique randomly generated password, at least 16 characters |
+| `PRIMARY_ACCOUNT` | Exact username/email of your ONE primary website account |
+| `DATA_DIR` | Writable runtime directory, default `/app/data` in Docker |
 
-## Quick Start (Railway / Docker)
+The dashboard responds with **503 until its login is configured**; this is
+intentional, rather than exposing account information publicly. Use HTTPS for
+Basic authentication. `/healthz` is an unauthenticated static liveness endpoint;
+set Railway's healthcheck path to `/healthz` if a healthcheck is configured. It
+reveals no account, credential or monitor state.
 
-```bash
-# Deploy on Railway — just connect this GitHub repo
-# Railway detects Dockerfile and deploys automatically
+Attach a Railway volume at `/app/data` (writable by UID 10001) if you need state
+and suspension markers to survive redeployments. Nothing in the repository's
+old root-level JSON files is automatically imported into the new application.
 
-# Or build locally:
-docker build -t cryptotaxi .
-docker run -d -p 8080:8080 cryptotaxi
+### Optional read-only monitoring — ONLY after API permission is confirmed
+
+| Variable | Purpose |
+|---|---|
+| `SITE_MONITORING_ENABLED` | Must be exactly `true` (case-insensitive); absent means OFF |
+| `PRIMARY_ACCOUNT_PASSWORD` | Website password, from Railway's secret Variables |
+| `MONITOR_LOCK_DATABASE_URL` | PostgreSQL connection URL shared by every deployment for this account |
+
+The database user needs permission to create/use the small
+`cryptotaxi_monitor_safety` table (hashed monitor key, suspension flag and next
+request time; no account passwords). Use a direct PostgreSQL connection or a
+**session-mode** pooler; transaction-mode poolers cannot safely support session
+advisory locks. Configure TLS for a remote
+public database connection. A lock/configuration failure blocks website access;
+the monitor never runs unlocked. Losing the database connection stops it before
+its next website request; it never reconnects silently. An already in-flight
+read cannot be recalled. This lock does not control older app versions or
+clients outside this application.
+
+Do **not** enable monitoring on another project with a different lock database.
+Use Railway's UI to stop/delete the spare service and set the retained service
+to one replica. Also stop old local/VPS/systemd processes and scheduled jobs.
+Code changes alone cannot delete Railway services or stop old binaries elsewhere.
+The new release makes NO site calls on any upgraded service unless explicitly
+opted in, even if two dashboards are deployed.
+
+After a manual stop/failure, investigate first. If appropriate, manually restart
+or redeploy the ONE retained service. Do not remove a confirmed suspension marker
+or restart a suspended account unless support has resolved it.
+
+## Credential migration and rotation
+
+- `accounts.json`, email configuration, proxy lists and runtime JSON are no longer
+  tracked or copied into Docker. Legacy local files are left in place, ignored;
+  the new runtime **does not read them**. There is no bulk-account import.
+- The Docker image uses an explicit source allowlist, excludes `.git`, `.env`,
+  data and backups, and runs as a non-root user.
+- Removing tracked files **does not remove them from Git history**, prior images,
+  old deployment artifacts, clones or backups. Rotate the website password,
+  exposed email passwords and any reused credentials. Revoke active sessions
+  where the provider supports it. This must be done in the provider's own UI.
+- Coordinated history cleanup is a separate administrative operation; this
+  change does not rewrite Git history or force-push other branches.
+- No passwords, cookies, tokens, raw login payloads or DSNs are persisted by the
+  monitor. Only whitelisted state fields and redacted suspension reasons are saved.
+
+## Running locally
+
+Use environment variables from your own secret store, then run:
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python supervisor.py
 ```
 
-## Files
+The supervisor stays in the foreground and terminates its children on shutdown.
+Do not run a second supervisor. The legacy auto-install scripts are disabled;
+they previously copied credentials and enabled additional unattended services.
+The dashboard binds `0.0.0.0` using Railway's `PORT` (default 8080).
 
-- `supervisor.py` — process manager / watchdog
-- `claimer.py` — main claimer
-- `account_creator.py` — background account creator
-- `dashboard.py` — web dashboard (port 8080)
-- `referral_faker.py` — referral faker (dormant by default)
-- `mail_reader.py` — mail.tm verification code reader
-- `ctl.sh` — control script (start/stop/restart/status)
-- `Dockerfile` — container config for Railway/Docker
+## Validation
 
-## Account creation disabled
+```sh
+.venv/bin/python -m unittest discover -s tests -v
+```
 
-`ACCOUNT_CREATION_ENABLED = False` in `runtime_config.py` prevents the supervisor
-from starting or restarting both account-creation workers. Their standalone entry
-points also exit without making requests. The dashboard shows them as disabled,
-even if old status files exist. Existing accounts and the claimer are unchanged.
-
-This takes effect on Railway only after the change is merged into `main` and
-successfully deployed. Editing this working branch does not stop existing production workers.
-
-The FREE ad visitor feature has been removed from both the dashboard and the
-claimer. No background worker visits or claims ad links. Historical runtime data
-is left intact; it does not re-enable this feature.
-
-## Banned account cleanup
-
-Recorded bans are reconciled at the beginning and end of every sweep. Banned
-accounts are removed from `accounts.json` (including stored credentials), live
-`status.json`, and in-memory account/session caches. The ban archive retains only
-its existing audit records; it is not a list of active accounts. Newly detected
-bans are archived before deletion. Concurrent detections use serialized, atomic
-JSON writes, and an empty active account list is supported.
-
-The dashboard uses the same filtered active list for cards, its total, the creator
-panel count, and `/count`. Deleted/status-only accounts are not reintroduced by
-stale status data. The page detects count changes every 10 seconds.
-
-This does not delete accounts on the external website. Automatic deletion requires
-an explicit account suspension/ban message or an account-specific error code in
-the actual login/API response, including error JSON returned with HTTP 200. The
-message and reason (for example, Multi Account) are retained in the audit archive.
-Generic 401/403, Forbidden, access denied, proxy/network errors, and repeated
-failures alone never authorize deletion.
-
-Legacy archive/status entries based only on 403 or failure counts are retained as
-unconfirmed history but no longer remove or hide an existing active account.
-Previously deleted credentials are not reconstructed or restored automatically.
-
-## Taxi start permission
-
-A taxi is eligible only when `canDrive` is explicitly `true`, no `block` is
-active, it has no current trip, is not broken, and has quota or bonus trips left.
-The same checks run against fresh server state immediately before every start
-POST, including authentication, connection and rate-limit retries. Own cars keep
-priority, but starting one never authorizes starting another from stale state.
-
-Restricted cars are skipped until the next sweep, without counting normal turn
-restrictions as account errors or bans. The dashboard shows the recorded block
-reason. The server can still reject a request if its state changes between the
-check and the start; a 400 is not retried immediately or treated as a ban.
+Tests use mocks/temporary state and local HTTP only; they do not access account
+APIs. Shared-lock unit tests simulate PostgreSQL ownership; a production shared
+PostgreSQL connection and Railway replica/volume configuration must still be
+verified by the deployment administrator. Automated trading/claiming code and its
+old execution tests have been replaced with read-only policy/security tests.
