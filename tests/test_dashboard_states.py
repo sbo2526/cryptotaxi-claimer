@@ -52,7 +52,7 @@ class DashboardStateTests(unittest.TestCase):
     def test_missing_primary_is_distinct_from_zero_accounts(self):
         with patch.dict(os.environ, {}, clear=True):
             view = dashboard.dashboard_view({}, NOW)
-            section = dashboard.status_section(view)
+            section = dashboard.status_section(view) + dashboard.technical_section(view)
         self.assertIn('تنظیم نشده', section)
         self.assertIn('PRIMARY_ACCOUNT', section)
         self.assertNotIn('تعداد اکانت‌ها', section)
@@ -88,7 +88,7 @@ class DashboardStateTests(unittest.TestCase):
         car = {'status': 'idle', 'name': 'Primary taxi', 'used': 10, 'limit': 10, 'bonus': 50}
         panel = dashboard.car_card(car)
         self.assertIn('quota-count">10 از 10</span>', panel)
-        self.assertIn('car-bonus-count">50</span>', panel)
+        self.assertIn('car-bonus-count">50</strong>', panel)
         self.assertIn('آمادهٔ حرکت', panel)
         self.assertNotIn('60', panel)
         self.assertNotIn('تمام شده', panel)
@@ -100,9 +100,9 @@ class DashboardStateTests(unittest.TestCase):
         ]), NOW)
         panel = dashboard.account_data_section(view)
         self.assertIn('account-bonus-count">50</strong>', panel)
-        self.assertIn('car-bonus-count">2</span>', panel)
-        self.assertIn('car-bonus-count">نامشخص</span>', panel)
-        self.assertNotIn('car-bonus-count">50</span>', panel)
+        self.assertIn('car-bonus-count">2</strong>', panel)
+        self.assertIn('car-bonus-count">نامشخص</strong>', panel)
+        self.assertNotIn('car-bonus-count">50</strong>', panel)
         self.assertNotIn('>52<', panel)
         self.assertNotIn('>60<', panel)
 
@@ -114,7 +114,7 @@ class DashboardStateTests(unittest.TestCase):
         for valid in (0, 10, 50, 50.0):
             self.assertEqual(dashboard.trip_count_text(valid), str(int(valid)))
         panel = dashboard.car_card({'status': 'idle'})
-        self.assertIn('car-bonus-count">نامشخص</span>', panel)
+        self.assertIn('car-bonus-count">نامشخص</strong>', panel)
         self.assertNotIn('>50<', panel)
         self.assertNotIn('>0<', panel)
         view = dashboard.dashboard_view(snapshot(), NOW)
@@ -122,7 +122,7 @@ class DashboardStateTests(unittest.TestCase):
 
     def test_zero_extras_are_displayed_without_overriding_reported_availability(self):
         panel = dashboard.car_card({'status': 'idle', 'used': 10, 'limit': 10, 'bonus': 0})
-        self.assertIn('car-bonus-count">0</span>', panel)
+        self.assertIn('car-bonus-count">0</strong>', panel)
         self.assertIn('آمادهٔ حرکت', panel)
         blocked = dashboard.car_card({'status': 'unavailable', 'bonus': 50, 'block_msg': 'Not your turn'})
         self.assertIn('در دسترس نیست', blocked)

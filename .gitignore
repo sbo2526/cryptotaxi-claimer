@@ -12,6 +12,7 @@ __pycache__/
 env/
 venv/
 .venv/
+.cache/
 
 # Credentials and runtime state must never enter Git.
 .env

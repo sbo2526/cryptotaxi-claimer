@@ -64,7 +64,7 @@ class SelectedPrimaryAccountTests(unittest.TestCase):
                 view = dashboard.dashboard_view(status)
                 self.assertIsNone(view['sample'])
                 self.assertIsNone(view['received'])
-                panel = dashboard.status_section(view)
+                panel = dashboard.status_section(view) + dashboard.technical_section(view)
                 self.assertIn(SELECTED_ACCOUNT, panel)
                 self.assertNotIn('other@example.test', panel)
 

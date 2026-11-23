@@ -314,7 +314,7 @@ def dashboard_view(status=None, now=None):
         empty_note += ' اگر قبلاً اطلاعات نمایش داده می‌شد، اتصال Volume پایدار به /app/data و مقدار DATA_DIR را بررسی کنید؛ نبود داده به‌تنهایی علت را مشخص نمی‌کند.'
     return {'user': user, 'enabled': enabled, 'suspended': suspended, 'sample': sample,
             'received': received, 'stale': stale, 'label': label, 'tone': tone, 'note': note,
-            'empty_note': empty_note, 'activity': activity, 'runtime': runtime}
+            'empty_note': empty_note, 'activity': activity, 'runtime': runtime, 'now': now}
 
 
 def operation_mode():
@@ -323,19 +323,136 @@ def operation_mode():
     return 'فقط‌خواندنی'
 
 
+def icon(name, css=''):
+    paths = {
+        'grid': '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+        'car': '<path d="m5 8 2-4h10l2 4M4 8h16v10H4zM7 18v2m10-2v2M7 12h1m8 0h1M4 15h16"/>',
+        'clock': '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+        'refresh': '<path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 13 2M5 16a8 8 0 0 0 13 2"/>',
+        'check': '<path d="m6 12 4 4 8-9"/>',
+        'pause': '<path d="M9 5v14M15 5v14"/>',
+        'alert': '<path d="m12 3 10 17H2L12 3ZM12 9v4m0 3v1"/>',
+        'wallet': '<path d="M20 7H5a2 2 0 0 1 0-4h13v4M3 5v14a2 2 0 0 0 2 2h15V7M20 11h-6v6h6m-3-3h.01"/>',
+        'bolt': '<path d="m13 2-9 12h7l-1 8 10-13h-7l1-7Z"/>',
+        'history': '<path d="M3 4v6h6M4 9a9 9 0 1 1 0 7m8-9v6l4 2"/>',
+        'lock': '<rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v3"/>',
+        'arrow': '<path d="M19 12H5m6-6-6 6 6 6"/>',
+    }
+    return f'<svg class="icon {css}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{paths.get(name, paths["grid"])}</svg>'
+
+
+def stop_code(view):
+    runtime, activity = view.get('runtime'), view.get('activity')
+    if runtime and runtime['stage'] == 'stopped':
+        return runtime['code'] or 'manual_review'
+    if runtime and runtime['stage'] in STARTUP_MESSAGES:
+        return None  # A newer startup report supersedes an older saved stop.
+    if activity and activity['status'] in ('stopped', 'suspended'):
+        # Do not reverse-parse user/server text; only known message matches.
+        return next((code for code, message in STOP_MESSAGES.items() if message == activity['message']), 'manual_review')
+    return None
+
+
+SIMPLE_STOPS = {
+    'already_running': ('یک اجرای دیگر شناسایی شد', 'هنگام شروع، اجرای دیگری قفل همین حساب را داشت.', 'اجرای اضافه را متوقف کنید؛ قفل دیتابیس را پاک نکنید.'),
+    'database_error': ('ارتباط با دیتابیس برقرار نشد', 'این اجرا پیش از ورود به بازی متوقف شده است.', 'اتصال دیتابیس را در تنظیمات Railway بررسی کنید.'),
+    'needs_login': ('ورود به بازی نیاز به بررسی دارد', 'سایت نشست ورود را نپذیرفته و برنامه متوقف شده است.', 'تنظیمات ورود و گزارش اجرای سرویس را بررسی کنید؛ رمز را در چت نفرستید.'),
+    'start_unknown': ('نتیجهٔ استارت روشن نیست', 'برای جلوگیری از استارت تکراری، برنامه متوقف شده است.', 'اول وضعیت سفر را در بازی بررسی کنید؛ درخواست را پشت‌سرهم تکرار نکنید.'),
+    'start_blocked': ('شرایط استارت تأیید نشد', 'اطلاعات یا اجازهٔ لازم برای حرکت کافی نبوده است.', 'جزئیات فنی را ببینید؛ استارت اجباری انجام نمی‌شود.'),
+    'rate_limited': ('پایش به محدودیت درخواست رسیده', 'برنامه برای بررسی دستی متوقف شده است.', 'گزارش سرویس را بررسی کنید و پشت‌سرهم Restart نزنید.'),
+    'invalid_config': ('تنظیمات حساب کامل نیست', 'یکی از تنظیمات لازم برای دریافت اطلاعات معتبر نیست.', 'تنظیمات حساب، رمز و دیتابیس را در Railway بررسی کنید.'),
+    'access_denied': ('سایت اجازهٔ دسترسی نداده', 'برای جلوگیری از تلاش مکرر، برنامه متوقف شده است.', 'علت رد دسترسی را بررسی کنید؛ ورود خودکار تکرار نمی‌شود.'),
+}
+
+
+def simple_status(view):
+    """Plain-language presentation only; the monitoring view remains authoritative."""
+    if view['suspended']:
+        return 'حساب تعلیق شده است', 'همهٔ عملیات این حساب متوقف می‌ماند.', 'ابتدا موضوع را با پشتیبانی بازی حل کنید؛ برنامه را دوباره فعال نکنید.', 'danger', 'alert'
+    if not view['user']:
+        return 'حساب اصلی را تنظیم کنید', 'هنوز حساب مجاز برای این اجرا تنظیم نشده است.', 'ایمیل حساب اصلی را در تنظیمات سرویس وارد کنید؛ راهنما در جزئیات فنی است.', 'warning', 'alert'
+    if not view['enabled']:
+        return 'دریافت اطلاعات خاموش است', 'در این حالت اطلاعات جدیدی از بازی گرفته نمی‌شود.', 'اگر فقط مشاهدهٔ اطلاعات ذخیره‌شده را می‌خواهید، نیازی به کاری نیست.', 'neutral', 'pause'
+    if view['label'] == 'پیکربندی پایش ناقص':
+        return SIMPLE_STOPS['invalid_config'] + ('warning', 'alert')
+    code = stop_code(view)
+    if code:
+        copy = SIMPLE_STOPS.get(code, ('پایش متوقف شده است', 'برنامه برای بررسی دستی متوقف شده است.', 'جزئیات فنی و گزارش اجرای سرویس را بررسی کنید.'))
+        return copy + ('warning', 'alert')
+    if view['label'] == 'شروع پایش نیازمند بررسی است':
+        return 'شروع برنامه طول کشیده است', 'چند دقیقه از آخرین گزارش شروع گذشته؛ ادامهٔ اجرا تأیید نشده است.', 'گزارش اجرای سرویس را در Railway بررسی کنید؛ Restart مکرر نزنید.', 'warning', 'clock'
+    runtime = view.get('runtime')
+    if runtime and runtime['stage'] in STARTUP_MESSAGES:
+        return 'شروع دریافت ثبت شده است', 'هنوز اولین دریافت اطلاعات در این اجرا تأیید نشده است.', 'یک تا دو دقیقه فرصت بدهید؛ صفحه خودش بازخوانی می‌شود.', 'neutral', 'clock'
+    if view.get('activity') and view['activity']['status'] == 'cooldown':
+        return 'مهلت انتظار ثبت شده است', 'درخواست بعدی باید محدودیت زمانی را رعایت کند.', 'فعلاً Restart نزنید؛ زمان برنامه‌ریزی‌شده را در پایین ببینید.', 'warning', 'clock'
+    if view['sample'] is None:
+        return 'هنوز اطلاعاتی در دسترس نیست', 'دریافت موفقی در داده‌های محلی این اجرا ثبت نشده است.', 'جزئیات فنی را ببینید؛ اگر خطایی ثبت نشده، Logs سرویس Railway را بررسی کنید.', 'warning', 'clock'
+    if view['stale']:
+        return 'اطلاعات ذخیره‌شده را می‌بینید', 'بیش از ۱۰ دقیقه از دریافت این اطلاعات گذشته است.', 'زمان بررسی بعدی را ببینید؛ این اطلاعات وضعیت فعلی بازی را تضمین نمی‌کند.', 'warning', 'clock'
+    return 'اطلاعات حساب دریافت شده است', 'وضعیت تاکسی‌ها بر اساس آخرین دریافت از بازی نمایش داده می‌شود.', 'تاکسی‌ها را در پایین ببینید؛ زمان دریافت، به معنی روشن‌بودن قطعی سرویس نیست.', 'success', 'check'
+
+
+def next_check_text(view):
+    activity, runtime = view.get('activity'), view.get('runtime')
+    if (not view['enabled'] or view['suspended'] or stop_code(view)
+            or view['label'] == 'پیکربندی پایش ناقص'
+            or (runtime and runtime['stage'] in STARTUP_MESSAGES)
+            or not activity or not activity['next_check']):
+        return 'زمانی ثبت نشده', 'بعد از دریافت اطلاعات، برنامه مشخص می‌شود.'
+    when = activity['next_check']
+    # dashboard_view captures the render clock, so tests and UI use the same time.
+    if when <= view.get('now', datetime.now(TZ)):
+        return 'موعد بررسی گذشته است', 'دریافت تازه یا ادامهٔ اجرا هنوز تأیید نشده است.'
+    label = 'پایان مهلت انتظار' if activity['status'] == 'cooldown' else 'زمان بررسی برنامه‌ریزی‌شده'
+    return when.strftime('%H:%M:%S'), fmt_jalali(when.strftime('%Y-%m-%d')) + ' · ' + label + '؛ نه تضمین اجرا.'
+
+
 def status_section(view):
-    account_label = 'تعلیق‌شده' if view['suspended'] else ('تنظیم‌شده' if view['user'] else 'تنظیم نشده')
-    account_note = esc(view['user']) if view['user'] else (
-        f'تنها اکانت مجاز: {esc(ALLOWED_PRIMARY_ACCOUNT)}. مقدار PRIMARY_ACCOUNT باید همین باشد؛ این کار پایش را روشن نمی‌کند.')
+    title, subtitle, action, tone, symbol = simple_status(view)
+    auto = view['enabled'] and auto_start_enabled() and bool(view['user'])
+    if auto and (view['suspended'] or stop_code(view)):
+        auto_title, auto_note = 'تنظیم روشن؛ اجرا متوقف', 'ابتدا علت توقف را بررسی کنید.'
+    elif auto and view['label'] == 'پیکربندی پایش ناقص':
+        auto_title, auto_note = 'تنظیم روشن؛ پیکربندی ناقص', 'برای اجرا، تنظیمات لازم باید کامل باشد.'
+    elif auto:
+        auto_title, auto_note = 'در تنظیمات روشن است', 'اجرا فقط با تأیید نوبت، سهمیه و وضعیت تازه.'
+    else:
+        auto_title, auto_note = 'خاموش است', 'برنامه تاکسی‌ها را خودکار استارت نمی‌زند.'
+    received = view['received'].strftime('%H:%M:%S') if view['received'] else 'در دادهٔ محلی ثبت نشده'
+    received_title = fmt_jalali(view['received'].strftime('%Y-%m-%d %H:%M:%S')) if view['received'] else 'دریافت موفقی ثبت نشده'
+    received_note = fmt_jalali(view['received'].strftime('%Y-%m-%d')) + ' · تهران' if view['received'] else 'منتظر ثبت یک دریافت موفق هستیم.'
+    upcoming, upcoming_note = next_check_text(view)
+    return f'''<section id="overview" class="status-area" aria-labelledby="statusTitle">
+      <div class="status-banner {tone}"><div class="status-symbol">{icon(symbol)}</div>
+        <div class="status-copy"><span class="eyebrow">وضعیت حساب شما</span><h2 id="statusTitle">{esc(title)}</h2><p>{esc(subtitle)}</p></div>
+        <a class="text-link" href="#technicalPanel">جزئیات فنی {icon('arrow')}</a>
+        <div class="next-action"><span>پیشنهاد بعدی</span><p>{esc(action)}</p></div>
+      </div>
+      <div class="overview" aria-label="خلاصهٔ وضعیت">
+        <article class="overview-card"><span class="card-icon">{icon('bolt')}</span><span class="eyebrow">استارت خودکار</span>
+          <strong>{auto_title}</strong><p>{auto_note}</p></article>
+        <article class="overview-card"><span class="card-icon">{icon('refresh')}</span><span class="eyebrow">آخرین دریافت از بازی</span>
+          <strong class="received-at" dir="auto" title="{esc(received_title)}">{esc(received)}</strong><p>{esc(received_note)}</p></article>
+        <article class="overview-card"><span class="card-icon">{icon('clock')}</span><span class="eyebrow">بررسی بعدی</span>
+          <strong dir="auto">{esc(upcoming)}</strong><p>{esc(upcoming_note)}</p></article>
+      </div></section>'''
+
+
+def technical_section(view):
+    account_label = 'تنظیم‌شده' if view['user'] else 'تنظیم نشده'
+    identity = view['user'] or ALLOWED_PRIMARY_ACCOUNT
     received = fmt_jalali(view['received'].strftime('%Y-%m-%d %H:%M:%S')) if view['received'] else 'در دادهٔ محلی ثبت نشده'
-    return f'''<section class="overview" aria-label="وضعیت داشبورد">
-      <article class="overview-card"><span class="eyebrow">وضعیت پایش</span>
-        <strong class="status-text {view['tone']}">{esc(view['label'])}</strong><p>{esc(view['note'])}</p></article>
-      <article class="overview-card"><span class="eyebrow">اکانت اصلی</span>
-        <strong>{account_label}</strong><p dir="auto">{account_note}</p></article>
-      <article class="overview-card"><span class="eyebrow">آخرین دریافت موفق</span>
-        <strong class="received-at">{esc(received)}</strong><p>به وقت تهران · زمان دریافت اطلاعات، نه زمان بازشدن صفحه</p></article>
-    </section>'''
+    body = f'''<dl class="technical-list"><div><dt>وضعیت دقیق</dt><dd>{esc(view['label'])}</dd></div>
+      <div><dt>گزارش برنامه</dt><dd>{esc(view['note'])}</dd></div>
+      <div><dt>اکانت اصلی</dt><dd>{account_label} · <bdi>{esc(identity)}</bdi></dd></div>
+      <div><dt>حالت تنظیم‌شده</dt><dd>{operation_mode()}</dd></div>
+      <div><dt>زمان دریافت کامل</dt><dd>{esc(received)} · به وقت تهران</dd></div></dl>
+      <p class="technical-help">تنظیم اکانت: <code>PRIMARY_ACCOUNT</code> · فعال‌سازی استارت: <code>AUTO_START_TRIPS_ENABLED=true</code>.
+      تغییر تنظیمات فقط در Railway انجام می‌شود؛ بازخوانی این صفحه عملیاتی در بازی انجام نمی‌دهد.</p>'''
+    if view['sample'] is None:
+        body += f'<p class="technical-help">{esc(view["empty_note"])}</p>'
+    return disclosure('technicalPanel', 'جزئیات فنی و راهنمای تنظیمات', 'اختیاری', body, icon('grid'))
 
 
 def trip_count_text(value):
@@ -345,57 +462,94 @@ def trip_count_text(value):
     return 'نامشخص'
 
 
+def taxi_art():
+    return '''<svg class="taxi-art" viewBox="0 0 280 110" fill="none" aria-hidden="true">
+      <ellipse cx="140" cy="95" rx="108" ry="5" fill="currentColor" opacity=".08"/>
+      <path d="M40 65h18l21-30h91l25 30h28c10 0 17 8 17 18v5H36V74c0-5 1-9 4-9Z" fill="currentColor"/>
+      <path d="m85 41-16 24h45V41H85Zm38 0v24h59l-20-24h-39Z" fill="#fff" opacity=".9"/>
+      <path d="M125 35v-9h26v9" fill="currentColor"/><path d="M47 73h12m152 0h18" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+      <path d="M121 70v15m-54-3h140" stroke="#172338" stroke-opacity=".2" stroke-width="2"/>
+      <circle cx="79" cy="86" r="15" fill="#263147"/><circle cx="79" cy="86" r="7" fill="#fff"/>
+      <circle cx="200" cy="86" r="15" fill="#263147"/><circle cx="200" cy="86" r="7" fill="#fff"/>
+      <path d="M125 32h4m4 0h4m4 0h4" stroke="#263147" stroke-width="2"/>
+      </svg>'''
+
+
+def is_turn_block(car):
+    message = str(car.get('block_msg') or '').strip().rstrip('.').casefold()
+    return message == 'ahora no es tu turno con este taxi'
+
+
 def car_card(car):
-    status = car.get('status', 'unavailable')
-    name = esc(car.get('name') or 'تاکسی بدون نام')
-    plate = esc(car.get('plate') or 'پلاک ثبت نشده')
-    ownership = 'اجاره‌ای' if car.get('rented') else 'شخصی'
-    label = {'on_trip': 'در سفر (طبق آخرین دریافت)', 'idle': 'آمادهٔ حرکت'}.get(status, 'در دسترس نیست')
+    state = car.get('status', 'unavailable')
+    rented = bool(car.get('rented'))
+    name, plate = esc(car.get('name') or 'تاکسی بدون نام'), esc(car.get('plate') or 'پلاک ثبت نشده')
+    label = {'on_trip': 'در سفر', 'idle': 'آمادهٔ حرکت'}.get(state, 'فعلاً در دسترس نیست')
+    if state == 'unavailable' and is_turn_block(car):
+        label = 'نوبت شما نیست'
+    tone = {'on_trip': 'blue', 'idle': 'green'}.get(state, 'gray')
     ends_at = car.get('ends_at')
-    if status == 'on_trip' and finite_number(ends_at) and ends_at > 0:
-        detail = f'<p class="trip-timer" data-ends="{int(ends_at)}">زمان باقی‌مانده بر اساس اطلاعات ثبت‌شده</p>'
-    elif status == 'idle':
-        detail = '<p>استارت خودکار در تنظیمات فعال است؛ نوبت، سهمیه و وضعیت تازه پیش از اجرا بررسی می‌شوند.</p>' if operation_mode() != 'فقط‌خواندنی' else '<p>استارت خودکار غیرفعال است.</p>'
+    if state == 'on_trip':
+        if finite_number(ends_at) and ends_at > 0:
+            detail = f'<p class="trip-timer" data-ends="{int(ends_at)}">زمان سفر از اطلاعات ثبت‌شده محاسبه می‌شود.</p>'
+        else:
+            detail = '<p class="car-hint">زمان پایان سفر مشخص نیست.</p>'
+    elif state == 'idle':
+        detail = '<p class="car-hint">اجرا فقط پس از تأیید شرایط استارت.</p>' if operation_mode() != 'فقط‌خواندنی' else '<p class="car-hint">استارت خودکار خاموش است.</p>'
+    elif is_turn_block(car):
+        detail = '<p class="car-hint">الان نوبت استفادهٔ شما از این تاکسی نیست.</p>'
     else:
-        detail = f'<p>{esc(car.get("block_msg") or "جزئیات بیشتری از محدودیت ثبت نشده است.")}</p>'
-    quota = f'''<p class="muted">سفر عادی باقیماندهٔ گزارش‌شده: {trip_count_text(car.get('left'))}</p>
-      <p class="muted">سهمیهٔ ثبت‌شده (مصرف‌شده از سقف):
-      <span class="quota-count">{trip_count_text(car.get('used'))} از {trip_count_text(car.get('limit'))}</span></p>
-      <p class="muted">سفر اضافهٔ این تاکسی (مقدار ثبت‌شده):
-      <span class="car-bonus-count">{trip_count_text(car.get('bonus'))}</span></p>'''
-    return f'''<article class="taxi-card"><div class="taxi-heading"><span aria-hidden="true">🚕</span>
-      <h3>{name}</h3><span class="tag">{ownership}</span></div><p class="plate" dir="auto">{plate}</p>
-      <span class="taxi-state">{label}</span>{detail}{quota}</article>'''
+        detail = '<p class="car-hint">سایت فعلاً اجازهٔ حرکت نداده است.</p>'
+    message = esc(car.get('block_msg') or 'پیام محدودیتی ثبت نشده است.')
+    kind = 'rented' if rented else 'owned'
+    return f'''<article class="taxi-card {kind}" data-car-kind="{kind}">
+      <div class="taxi-top"><span class="ownership">{'اجاره‌ای' if rented else 'تاکسی شخصی'}</span><span class="state-pill {tone}"><i aria-hidden="true"></i>{label}</span></div>
+      <div class="car-illustration">{taxi_art()}</div>
+      <h3 dir="auto">{name}</h3><div class="plate" dir="ltr">{plate}</div>{detail}
+      <div class="quota-grid"><div><span>سفر عادی باقی‌مانده</span><strong>{trip_count_text(car.get('left'))}</strong></div>
+        <div><span>اکسترای این تاکسی</span><strong class="car-bonus-count">{trip_count_text(car.get('bonus'))}</strong></div></div>
+      <details class="car-details"><summary>جزئیات سهمیه و پیام سایت <span aria-hidden="true">+</span></summary>
+        <p>سهمیهٔ ثبت‌شده (مصرف‌شده از سقف): <span class="quota-count">{trip_count_text(car.get('used'))} از {trip_count_text(car.get('limit'))}</span></p>
+        <p dir="auto">{message}</p><p>وضعیت طبق آخرین دریافت است؛ آماده‌بودن، تضمین استارت نیست.</p></details>
+      </article>'''
 
 
 def account_data_section(view):
     if view['sample'] is None:
-        return f'''<section id="emptyState" class="empty-state" aria-labelledby="emptyTitle">
-          <span class="empty-icon" aria-hidden="true">⏸</span><h2 id="emptyTitle">اطلاعات ذخیره‌شده‌ای از اکانت در دسترس نیست.</h2>
-          <p>{esc(view['empty_note'])}</p></section>'''
-    sample = view['sample']
-    cars = sample['cars']
+        return f'''<section id="taxis"><section id="emptyState" class="empty-state" aria-labelledby="emptyTitle">
+          <span class="empty-icon">{icon('car')}</span><h2 id="emptyTitle">اطلاعات ذخیره‌شده‌ای از اکانت در دسترس نیست.</h2>
+          <p>تا دریافت اطلاعات، موجودی و تاکسی‌ها را به‌صورت صفر نمایش نمی‌دهیم.</p>
+          <a class="button secondary" href="#technicalPanel">دیدن علت و راهنما {icon('arrow')}</a></section></section>'''
+    sample, cars = view['sample'], view['sample']['cars']
     wallet = sample.get('wallet') if isinstance(sample.get('wallet'), dict) else {}
     balance = wallet.get('usdt')
     balance_html = f'{balance:,.4f}' if finite_number(balance) and balance >= 0 else '—'
-    note = 'این اطلاعات قدیمی است و وضعیت فعلی سایت را تأیید نمی‌کند.' if view['stale'] else 'اطلاعات بر اساس آخرین دریافت موفق است؛ هیچ عملیات خودکاری انجام نمی‌شود.'
-    if view['enabled'] and auto_start_enabled():
-        note = ('این اطلاعات قدیمی است؛ ' if view['stale'] else '') + 'استارت خودکار در تنظیمات فعال است؛ فقط پس از بررسی وضعیت تازهٔ سایت اجرا می‌شود. کلیم و رنت غیرفعال‌اند.'
+    note = 'بر اساس آخرین دریافت از بازی؛ وضعیت فعلی ممکن است تغییر کرده باشد.'
+    if view['stale']:
+        note = 'این اطلاعات قدیمی است و وضعیت فعلی سایت را تأیید نمی‌کند.'
     if not view['enabled']:
         note = 'اطلاعات ذخیره‌شده نمایش داده می‌شود؛ پایش خارجی خاموش است. ' + note
-    cards = ''.join(car_card(car) for car in cars) or '<p class="empty-inline">در آخرین دریافت، تاکسی‌ای برای این اکانت ثبت نشده است.</p>'
+    owned = sum(not bool(car.get('rented')) for car in cars)
+    cards = ''.join(car_card(car) for car in sorted(cars, key=lambda car: bool(car.get('rented'))))
+    if not cards:
+        cards = '<p class="empty-inline">در آخرین دریافت، تاکسی‌ای برای این اکانت ثبت نشده است.</p>'
+    filter_empty = '<p class="empty-inline" data-filter-empty hidden>تاکسی‌ای در این دسته ثبت نشده است.</p>' if cars else ''
     return f'''<section id="accountData" aria-labelledby="dataTitle">
-      <div class="section-heading"><h2 id="dataTitle">اطلاعات اکانت اصلی</h2><span class="tag">{operation_mode()}</span></div>
-      <p class="data-note">{note}</p><div class="metrics">
-        <article class="metric"><span>موجودی USDT</span><strong dir="ltr">{balance_html}</strong></article>
-        <article class="metric"><span>تاکسی‌های ثبت‌شده</span><strong>{len(cars)}</strong></article>
-        <article class="metric"><span>در حال سفر</span><strong>{sum(car.get('status') == 'on_trip' for car in cars)}</strong></article>
-        <article class="metric"><span>آمادهٔ حرکت</span><strong>{sum(car.get('status') == 'idle' for car in cars)}</strong></article>
-      </div><p class="data-note">سفر اضافهٔ اکانت (مقدار ثبت‌شده):
-        <strong class="account-bonus-count">{trip_count_text(sample.get('bonus_trips'))}</strong><br>
-        سهمیه و سفرهای اضافه جدا هستند؛ رسیدن مصرف به سقف سهمیه، به‌تنهایی پایان همهٔ سفرها را ثابت نمی‌کند.
-        مقدار اضافهٔ اکانت با مقدار هر تاکسی جمع زده نشده است؛ وضعیت حرکت طبق آخرین پاسخ سایت است.</p>
-      <div class="taxi-grid">{cards}</div></section>'''
+      <div class="metrics" aria-label="خلاصهٔ حساب">
+        <article class="metric wallet-metric">{icon('wallet')}<span>موجودی کیف پول</span><strong dir="ltr">{balance_html} <small>USDT</small></strong><p>موجودیِ آخرین دریافت</p></article>
+        <article class="metric">{icon('car')}<span>همهٔ تاکسی‌ها</span><strong>{len(cars)} <small>تاکسی</small></strong><p>{owned} شخصی · {len(cars) - owned} اجاره‌ای</p></article>
+        <article class="metric">{icon('clock')}<span>در حال سفر</span><strong>{sum(car.get('status') == 'on_trip' for car in cars)} <small>تاکسی</small></strong><p>طبق آخرین اطلاعات</p></article>
+        <article class="metric">{icon('check')}<span>آمادهٔ حرکت</span><strong>{sum(car.get('status') == 'idle' for car in cars)} <small>تاکسی</small></strong><p>آمادگی گزارش‌شده توسط سایت</p></article>
+      </div>
+      <div id="taxis" class="section-heading"><div><span class="eyebrow">ناوگان شما</span><h2 id="dataTitle">تاکسی‌های من</h2></div>
+        <div class="account-bonus">{icon('bolt')}<span>اکسترای اکانت</span><strong class="account-bonus-count">{trip_count_text(sample.get('bonus_trips'))}</strong>
+          <details class="bonus-help"><summary aria-label="توضیح اکسترای اکانت">؟</summary><p>اکسترای اکانت و هر تاکسی جدا گزارش شده‌اند؛ این اعداد را با هم جمع نمی‌کنیم. سهمیهٔ ۱۰ از ۱۰ هم به‌تنهایی پایان سفرهای اضافه نیست.</p></details></div></div>
+      <div class="fleet-toolbar"><div class="filters" role="group" aria-label="فیلتر تاکسی‌ها">
+        <button type="button" data-filter="all" aria-pressed="true">همه <span>{len(cars)}</span></button>
+        <button type="button" data-filter="owned" aria-pressed="false">شخصی <span>{owned}</span></button>
+        <button type="button" data-filter="rented" aria-pressed="false">اجاره‌ای <span>{len(cars) - owned}</span></button></div>
+        <p class="data-note">{note}</p></div>
+      <div class="taxi-grid">{cards}</div>{filter_empty}</section>'''
 
 
 def disclosure(panel_id, title, badge, body, icon):
@@ -418,7 +572,7 @@ def banned_accounts_section():
       <th scope="col">دلیل ثبت‌شده</th><th scope="col">زمان تشخیص (تهران)</th></tr></thead>
       <tbody>''' + ''.join(rows) + '</tbody></table></div>') if rows else '<p class="empty-inline">هیچ سابقهٔ تعلیقی ثبت نشده است.</p>'
     badge = f'{confirmed} اکانت بن‌شده' if records else 'بدون سابقه'
-    return disclosure('bannedAccountsPanel', 'سابقهٔ تعلیق اکانت‌ها', badge, body, '🚫')
+    return disclosure('bannedAccountsPanel', 'سابقهٔ تعلیق اکانت‌ها', badge, body, icon('alert'))
 
 
 def event_lines():
@@ -454,18 +608,280 @@ def events_section():
     lines = event_lines()
     body = '<div class="event-list">' + ''.join(f'<p dir="auto">{esc(line)}</p>' for line in lines) + '</div>' if lines else '<p class="empty-inline">رویدادی برای نمایش وجود ندارد.</p>'
     body += '<p class="muted">بر اساس اطلاعات ذخیره‌شدهٔ محلی؛ گزارش اجرای سرویس در لاگ‌های Railway است.</p>'
-    return disclosure('eventsPanel', 'رویدادها', f'{len(lines)} رویداد ثبت‌شده' if lines else 'بدون رویداد', body, '📋')
+    return disclosure('eventsPanel', 'رویدادها', f'{len(lines)} رویداد ثبت‌شده' if lines else 'بدون رویداد', body, icon('history'))
 
 
 PAGE_CSS = '''
-:root{color-scheme:dark;--bg:#080f1d;--card:#101b2d;--line:#223149;--text:#e5edf8;--muted:#9aaac0;--gold:#f7c85a;--blue:#83b9ff;--green:#6ed4aa;--red:#ffa5ab}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top right,#152342 0,transparent 55%),var(--bg);color:var(--text);font-family:Tahoma,Arial,sans-serif;line-height:1.85;min-height:100vh}
-.wrap{width:min(1180px,calc(100% - 40px));margin:auto}header{border-bottom:1px solid var(--line);padding:30px 0 24px}.header-row{display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{display:flex;align-items:center;gap:14px}.brand-icon{font-size:32px;background:#263023;border:1px solid #786332;border-radius:16px;padding:5px 13px}h1{font-size:23px;margin:0;line-height:1.5}header p{color:var(--muted);margin:4px 0 0;font-size:13px}.safe-badge,.tag{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;white-space:nowrap}.safe-badge{color:var(--gold);border-color:#6c572d;background:#302919}
-main{padding:28px 0 10px}.overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:26px}.overview-card{background:linear-gradient(140deg,#142137,var(--card));border:1px solid var(--line);border-radius:18px;padding:22px;min-width:0}.eyebrow{display:block;color:var(--muted);font-size:12px;margin-bottom:10px}.overview-card strong{display:block;font-size:19px;font-weight:600}.overview-card p{font-size:12px;color:var(--muted);margin:10px 0 0;overflow-wrap:anywhere}.overview-card .received-at{font-size:16px;font-variant-numeric:tabular-nums}.neutral{color:var(--muted)}.warning{color:var(--gold)}.danger{color:var(--red)}.success{color:var(--green)}
-.empty-state{border:1px dashed #3b4c66;border-radius:22px;text-align:center;padding:52px 24px;background:#0f192b;margin-bottom:28px}.empty-icon{display:inline-flex;align-items:center;justify-content:center;width:64px;height:64px;border-radius:20px;background:#23314a;color:var(--gold);font-size:30px}.empty-state h2{font-size:20px;margin:20px 0 10px}.empty-state p{color:var(--muted);font-size:14px;margin:0}.section-heading{display:flex;align-items:center;gap:14px;margin-top:4px}.section-heading h2{font-size:19px;margin:0}.data-note{color:var(--muted);font-size:13px;margin:10px 0 18px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.metric{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:19px}.metric span{font-size:12px;color:var(--muted);display:block}.metric strong{display:block;font-size:26px;color:var(--gold);margin-top:8px;font-variant-numeric:tabular-nums}
-.taxi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:16px;margin:18px 0 28px}.taxi-card{border:1px solid var(--line);border-radius:17px;background:#0e192b;padding:20px;min-width:0}.taxi-heading{display:flex;gap:9px;align-items:center}.taxi-heading h3{font-size:15px;flex:1;margin:0;overflow-wrap:anywhere}.taxi-heading>span:first-child{font-size:23px}.plate{color:var(--muted);font-size:12px}.taxi-state{font-size:12px;color:var(--blue)}.taxi-card p{font-size:12px;color:var(--muted)}.taxi-card .trip-timer{color:var(--gold);font-variant-numeric:tabular-nums}
-.history{display:grid;gap:14px;margin-top:28px}.history-panel{border:1px solid var(--line);border-radius:17px;background:#0e192a;overflow:hidden}.history-panel summary{display:flex;align-items:center;gap:12px;padding:18px 22px;cursor:pointer;list-style:none;user-select:none;min-height:66px}.history-panel summary::-webkit-details-marker{display:none}.history-panel summary:hover{background:#152239}.history-panel summary:focus-visible{outline:2px solid var(--blue);outline-offset:-4px;border-radius:16px}.panel-icon{font-size:21px}.panel-title{font-size:15px;flex:1}.chevron{font-size:23px;color:var(--muted);transition:transform .15s}.history-panel[open] .chevron{transform:rotate(180deg)}.panel-body{padding:0 22px 22px;font-size:13px}.muted,.empty-inline{color:var(--muted)}.empty-inline{font-size:13px;margin:0;padding:8px 0}.table-scroll{overflow:auto;max-height:340px}table{border-collapse:collapse;width:100%;text-align:right;font-size:12px}th{color:var(--muted);position:sticky;top:0;background:#101d31}td,th{padding:12px;border-bottom:1px solid var(--line);min-width:100px}td{overflow-wrap:anywhere}.event-list{max-height:320px;overflow:auto;font-family:monospace}.event-list p{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:8px;border-bottom:1px solid var(--line)}footer{text-align:center;padding:25px 0 30px;color:var(--muted);font-size:11px}
-@media(max-width:850px){.overview{grid-template-columns:1fr}.overview-card{padding:18px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-card strong{font-size:17px}}@media(max-width:480px){.wrap{width:calc(100% - 28px)}.header-row{align-items:flex-start;flex-direction:column;gap:14px}h1{font-size:20px}.empty-state{padding:32px 16px}.empty-state h2{font-size:17px}.history-panel summary{padding:16px 14px;flex-wrap:wrap;gap:8px}.panel-body{padding:0 14px 16px}.panel-title{min-width:120px}.tag{font-size:11px;padding:3px 9px}.metric{padding:15px}}@media(prefers-reduced-motion:reduce){.chevron{transition:none}}
+:root{color-scheme:light;--bg:#f5f6f8;--card:#fff;--ink:#202c40;--muted:#66748a;--line:#e6eaf0;--yellow:#f5bd45;--navy:#142137;--green:#21745a;--red:#ad3644;--amber:#94631c;--blue:#3765b7}
+
+*{box-sizing:border-box}
+html{scroll-padding-top:24px}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Tahoma,Arial,sans-serif;font-size:14px;line-height:1.85}
+a{color:inherit;text-decoration:none}
+button{font:inherit}
+button,a,summary{-webkit-tap-highlight-color:transparent}
+button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #638bd5;outline-offset:4px}
+button{cursor:pointer}
+[hidden]{display:none!important}
+svg{flex-shrink:0}
+.icon{width:22px;height:22px;vertical-align:middle}
+.app-shell{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}
+.sidebar{background:var(--navy);color:#fff;padding:34px 23px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:11px}
+.brand-mark{width:43px;height:43px;border-radius:13px;background:var(--yellow);display:grid;place-items:center;color:var(--navy)}
+.brand-mark .icon{width:27px;height:27px}
+.brand-name{font-size:21px;letter-spacing:-.5px;line-height:1.4;font-weight:bold}
+.brand-caption{display:block;font-size:11px;color:#a6b4c9;letter-spacing:1.5px;font-family:Arial,sans-serif;margin-top:4px}
+.nav-caption{font-size:11px;color:#8999b1;margin:48px 13px 13px}
+.sidebar nav{display:grid;gap:7px}
+.nav-link{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:10px;color:#afbdd0;font-size:13px}
+.nav-link:hover{background:#20314b;color:#fff}
+.nav-link[aria-current]{background:#f5bd4518;color:#f5c75c;border:1px solid #f5bd4520}
+.sidebar-bottom{margin-top:auto;padding-top:28px}
+.private-label{font-size:11px;color:#c1cddd;display:flex;gap:9px;align-items:center}
+.private-label .icon{width:16px;height:16px;color:#dfbc69}
+.sidebar-bottom p{color:#8e9db5;font-size:11px;border-top:1px solid #2a3850;margin-top:20px;padding-top:18px}
+.workspace{padding:30px 36px 18px;max-width:1580px;width:100%;min-width:0;margin-inline:auto}
+.page-header{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:26px}
+.breadcrumb{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:9px}
+.breadcrumb span{color:#a8b0bd}
+h1{font-size:26px;letter-spacing:-.8px;margin:7px 0 0;line-height:1.65}
+.header-actions{display:flex;align-items:center;gap:14px}
+.identity{display:flex;align-items:center;gap:9px;border-inline-end:1px solid var(--line);padding-inline-end:18px}
+.avatar{display:grid;place-items:center;width:36px;height:36px;border:1px solid #e4d9b8;border-radius:50%;background:#fff5da;color:#90671c}
+.mobile-identity{display:none}
+.identity strong{font-size:11px;font-weight:normal;display:block}
+.identity bdi{font:11px Arial,sans-serif;color:var(--muted);display:block;max-width:210px;overflow-wrap:anywhere}
+.button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line);border-radius:9px;padding:8px 13px;background:#fff;color:var(--ink);font-size:11px;white-space:nowrap}
+.button:hover{border-color:#bdc9db;background:#fafbfc}
+.button .icon{width:16px;height:16px}
+.eyebrow{display:block;font-size:11px;font-weight:normal;color:var(--muted);margin-bottom:5px}
+.status-banner{display:flex;align-items:center;gap:16px;flex-wrap:wrap;border-radius:14px;background:#eef6f2;border:1px solid #d8e8df;padding:22px 23px;color:var(--green);margin-bottom:18px}
+.status-banner.warning{background:#fffaee;border-color:#efdfba;color:#865c19}
+.status-banner.neutral{background:#eef2f8;border-color:#dbe3ef;color:#526784}
+.status-banner.danger{background:#fff0f1;border-color:#efd6d9;color:var(--red)}
+.status-symbol{height:46px;width:46px;background:#ffffffa8;border:1px solid #ffffffd9;border-radius:50%;display:grid;place-items:center;flex-shrink:0}
+.status-symbol .icon{width:24px;height:24px}
+.status-copy{flex:1;min-width:180px}
+.status-copy .eyebrow{color:inherit;opacity:.8;margin:0 0 3px}
+.status-copy h2{margin:0;font-size:18px;letter-spacing:-.3px}
+.status-copy p{margin:5px 0 0;font-size:12px;color:var(--ink);opacity:.8}
+.text-link{font-size:11px;display:inline-flex;align-items:center;gap:6px}
+.text-link .icon{width:17px;height:17px}
+.text-link:hover{text-decoration:underline}
+.next-action{flex-basis:100%;display:flex;gap:13px;align-items:baseline;border-top:1px solid currentColor;border-top-color:#8da49935;padding-top:12px;margin-top:0;color:var(--ink)}
+.next-action>span{font-size:11px;white-space:nowrap;background:#ffffffa8;padding:2px 8px;border-radius:5px}
+.next-action p{margin:0;font-size:12px;line-height:1.9}
+.overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:22px}
+.overview-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 19px;min-width:0;position:relative}
+.card-icon{float:inline-end;color:#92a0b4}
+.card-icon .icon{width:18px;height:18px}
+.overview-card strong{display:block;font-size:15px;font-weight:600;line-height:1.8;margin-top:9px}
+.overview-card p{font-size:11px;color:var(--muted);margin:7px 0 0;overflow-wrap:anywhere}
+.overview-card .received-at{font-variant-numeric:tabular-nums}
+
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:31px}
+.metric{border-radius:13px;border:1px solid var(--line);background:#fff;padding:20px 18px;min-width:0;position:relative}
+.metric>.icon{position:absolute;inset-inline-end:18px;top:20px;color:#94a0b3;width:18px;height:18px}
+.metric>span{display:block;color:var(--muted);font-size:11px;padding-inline-end:24px}
+.metric strong{font-size:29px;font-weight:600;display:block;margin-top:9px;line-height:1.5;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.metric small{font-size:11px;font-weight:normal;letter-spacing:0;color:var(--muted)}
+.metric p{margin:7px 0 0;font-size:11px;color:var(--muted)}
+.wallet-metric{background:var(--navy);border-color:var(--navy);color:#fff}
+.wallet-metric>span,.wallet-metric p,.wallet-metric small{color:#bac8dd}
+.wallet-metric>.icon{color:#e6b94d}
+.wallet-metric strong{color:#f8ca63;text-align:right;font-size:28px}
+.section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:17px;scroll-margin-top:20px}
+.section-heading h2{font-size:20px;margin:0;letter-spacing:-.4px}
+.section-heading .eyebrow{margin-bottom:0}
+.account-bonus{background:#fff7e4;border:1px solid #f0dfb6;display:flex;align-items:center;gap:9px;border-radius:9px;padding:8px 12px;font-size:11px;color:#795719}
+.account-bonus .icon{width:16px;height:16px}
+.account-bonus strong{font:600 17px Arial,sans-serif}
+.bonus-help{position:relative}
+.bonus-help summary{list-style:none;display:grid;place-items:center;width:19px;height:19px;cursor:pointer;border:1px solid #d4b97a;border-radius:50%;font-size:11px}
+.bonus-help summary::-webkit-details-marker{display:none}
+.bonus-help p{position:absolute;z-index:4;width:270px;inset-inline-end:0;top:20px;padding:15px;background:#fff;border:1px solid var(--line);box-shadow:0 12px 40px #14213720;border-radius:9px;color:var(--ink);font-size:11px}
+.fleet-toolbar{display:flex;align-items:center;justify-content:space-between;gap:15px;flex-wrap:wrap;margin-bottom:17px}
+.filters{display:flex;gap:6px;padding:4px;border:1px solid var(--line);background:#fff;border-radius:9px}
+.filters button{display:flex;align-items:center;gap:6px;border:0;background:none;color:var(--muted);border-radius:6px;padding:6px 11px;font-size:11px}
+.filters button[aria-pressed=true]{background:var(--navy);color:#fff}
+.filters button span{font:11px Arial,sans-serif;opacity:.65}
+.data-note{font-size:11px;color:var(--muted);margin:0;max-width:480px}
+.taxi-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:17px}
+.taxi-card{border:1px solid var(--line);background:#fff;border-radius:13px;padding:18px 18px 0;overflow:hidden;min-width:0}
+.taxi-card.owned{border-top:3px solid #e8b746;padding-top:16px}
+.taxi-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.ownership{color:var(--muted);font-size:11px}
+.state-pill{border-radius:6px;padding:3px 7px;font-size:11px;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.state-pill i{width:5px;height:5px;border-radius:50%;background:currentColor}
+.state-pill.green{background:#edf7f1;color:#257352}
+.state-pill.blue{background:#edf3ff;color:#3b66b2}
+.state-pill.gray{background:#f0f2f5;color:#697489}
+.car-illustration{height:93px;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse,#f8f2df,transparent 70%);margin-top:10px}
+.taxi-art{width:200px;max-width:100%;height:87px;color:#e8b747}
+.rented .car-illustration{background:radial-gradient(ellipse,#eef2f9,transparent 70%)}
+.rented .taxi-art{color:#8da5c4}
+.taxi-card h3{font:600 15px/1.7 Arial,Tahoma,sans-serif;letter-spacing:-.1px;margin:3px 0 8px;text-align:center;overflow-wrap:anywhere}
+.plate{font:11px/1.7 monospace;letter-spacing:1.5px;background:#fafbfc;border:1px solid var(--line);border-inline-start:4px solid #4a638b;border-radius:4px;padding:2px 10px;width:max-content;max-width:100%;margin:auto;overflow-wrap:anywhere}
+.car-hint,.trip-timer{font-size:11px;color:var(--muted);text-align:center;min-height:20px;margin:12px 0}
+.trip-timer{color:var(--blue);font-variant-numeric:tabular-nums}
+.quota-grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:9px;margin:12px 0 15px;background:#fcfcfd}
+.quota-grid>div{padding:9px;text-align:center;min-width:0}
+.quota-grid>div+div{border-inline-start:1px solid var(--line)}
+.quota-grid span{display:block;font-size:11px;color:var(--muted)}
+.quota-grid strong{display:block;font-size:20px;margin-top:3px;line-height:1.5;color:#354863;font-variant-numeric:tabular-nums}
+.quota-grid .car-bonus-count{color:#9a6a1f}
+.car-details{border-top:1px solid var(--line);font-size:11px}
+.car-details summary{list-style:none;display:flex;justify-content:space-between;align-items:center;cursor:pointer;gap:5px;padding:10px 0;color:var(--muted)}
+.car-details summary::-webkit-details-marker{display:none}
+.car-details summary>span{font-size:17px;color:#9aa5b5}
+.car-details p{overflow-wrap:anywhere;color:var(--muted);margin:5px 0 12px}
+.quota-count{white-space:nowrap}
+.empty-state{background:#fff;border:1px dashed #cbd5e2;border-radius:14px;text-align:center;padding:43px 24px;margin-top:20px}
+.empty-icon{display:grid;place-items:center;width:61px;height:61px;background:#f6f0df;color:#b58a32;margin:auto;border-radius:18px}
+.empty-icon .icon{width:29px;height:29px}
+.empty-state h2{font-size:17px;margin:18px 0 8px}
+.empty-state p{font-size:12px;color:var(--muted);margin:0 0 20px}
+
+.history{display:grid;gap:11px;margin-top:34px;scroll-margin-top:20px}
+.history-heading{display:flex;align-items:center;gap:9px;margin-bottom:2px}
+.history-heading .icon{width:19px;height:19px;color:var(--muted)}
+.history-heading h2{font-size:16px;margin:0}
+.history-heading p{font-size:11px;color:var(--muted);margin:0 5px 0 0}
+.history-panel{background:#fff;border:1px solid var(--line);border-radius:11px;overflow:hidden;scroll-margin-top:18px}
+.history-panel summary{display:flex;align-items:center;gap:11px;padding:15px 18px;cursor:pointer;list-style:none;min-height:60px}
+.history-panel summary::-webkit-details-marker{display:none}
+.history-panel summary:hover{background:#fafbfd}
+.panel-icon{display:flex;align-items:center;color:#8e9bb0;font-size:17px}
+.panel-icon .icon{width:18px;height:18px}
+.panel-title{flex:1;font-size:12px}
+.tag{font-size:11px;color:var(--muted);padding:2px 8px;background:#f4f6f9;border-radius:5px;white-space:nowrap}
+.chevron{font-size:20px;color:#93a0b1;transition:transform .15s}
+.history-panel[open] .chevron{transform:rotate(180deg)}
+.panel-body{padding:0 20px 20px;font-size:11px;color:var(--ink)}
+.technical-list{margin:0}
+.technical-list>div{display:grid;grid-template-columns:130px 1fr;padding:11px 0;border-top:1px solid var(--line);gap:15px}
+.technical-list dt{color:var(--muted)}
+.technical-list dd{margin:0;overflow-wrap:anywhere}
+.technical-help{color:var(--muted);font-size:11px;overflow-wrap:anywhere}
+.technical-help code{font-size:11px;direction:ltr;unicode-bidi:isolate;background:#f4f6f9;color:#4c5e7b;padding:2px 5px;border-radius:4px}
+.muted,.empty-inline{color:var(--muted)}
+.empty-inline{font-size:12px;padding:12px 0;margin:0}
+.table-scroll{overflow:auto;max-height:330px}
+table{border-collapse:collapse;width:100%;text-align:right;font-size:11px}
+td,th{padding:12px;border-bottom:1px solid var(--line);min-width:100px;overflow-wrap:anywhere}
+th{color:var(--muted);background:#f7f9fc;position:sticky;top:0;font-weight:normal}
+.event-list{max-height:290px;overflow:auto}
+.event-list p{border-bottom:1px solid var(--line);padding:10px 0;margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.9 Tahoma,Arial,sans-serif}
+.page-footer{display:flex;justify-content:space-between;gap:15px;padding:24px 0 6px;color:#8190a5;font-size:11px}
+.page-footer>span{display:flex;align-items:center;gap:6px}
+.page-footer .icon{width:12px;height:12px}
+.skip-link{position:absolute;top:-100px;inset-inline-start:10px;padding:10px;background:#fff;z-index:10}
+.skip-link:focus{top:10px}
+
+@media(min-width:1700px){.workspace{padding-inline:48px}
+.taxi-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+
+@media(max-width:1250px){.app-shell{grid-template-columns:195px minmax(0,1fr)}
+.sidebar{padding-inline:17px}
+.workspace{padding:25px}
+.identity{display:none}
+.mobile-identity{display:block;font:11px/1.7 Arial,Tahoma,sans-serif;color:var(--muted);margin:6px 0 0;overflow-wrap:anywhere}
+.taxi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.metric{padding:17px 14px}
+.metric strong{font-size:25px}
+.metric>.icon{display:none}
+.metric>span{padding:0}
+.overview-card strong{font-size:13px}
+.overview-card{padding:16px}
+}
+
+@media(max-width:850px){.app-shell{grid-template-columns:1fr}
+.sidebar{position:static;height:auto;padding:17px 23px;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:20px}
+.brand-caption{display:none}
+.brand-name{font-size:18px}
+.brand-mark{width:34px;height:34px;border-radius:10px}
+.brand-mark .icon{width:22px;height:22px}
+.nav-caption,.sidebar-bottom{display:none}
+.sidebar nav{display:flex;gap:5px}
+.nav-link{padding:8px 10px;font-size:11px;gap:7px}
+.nav-link .icon{width:17px;height:17px}
+.workspace{padding:23px}
+.overview-card p{font-size:11px}
+.metrics{margin-bottom:25px}
+.overview{gap:10px}
+.history-heading p{display:none}
+}
+
+@media(max-width:580px){body{font-size:13px}
+.sidebar{flex-direction:column;gap:14px;align-items:stretch;padding:16px}
+.brand{justify-content:center}
+.sidebar nav{justify-content:center}
+.nav-link{flex:1;justify-content:center;padding:7px;font-size:11px}
+.nav-link .icon{width:15px;height:15px}
+.workspace{padding:19px 15px 14px}
+.page-header{align-items:center;margin-bottom:18px;gap:10px}
+.breadcrumb{font-size:11px}
+h1{font-size:21px;margin-top:4px}
+.header-actions{gap:0}
+.button{padding:8px 9px;font-size:11px}
+.status-banner{padding:16px;gap:11px}
+.status-symbol{width:36px;height:36px}
+.status-symbol .icon{width:20px;height:20px}
+.status-copy{min-width:130px}
+.status-copy h2{font-size:15px}
+.status-copy p{font-size:11px}
+.status-banner>.text-link{flex-basis:100%;justify-content:flex-end;font-size:11px}
+.next-action{gap:8px;align-items:flex-start}
+.next-action>span{padding-inline:5px;font-size:11px}
+.next-action p{font-size:11px}
+.overview{grid-template-columns:1fr;gap:8px;margin-bottom:16px}
+.overview-card{display:grid;grid-template-columns:30px 1fr 1fr;align-items:center;gap:0 8px;padding:13px}
+.card-icon{grid-row:1/3;float:none}
+.overview-card .eyebrow{grid-column:2;grid-row:1;margin:0}
+.overview-card strong{grid-column:3;grid-row:1;font-size:12px;text-align:left;margin:0}
+.overview-card p{grid-column:2/4;margin:4px 0 0;font-size:11px}
+.metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.metric{padding:15px}
+.metric strong,.wallet-metric strong{font-size:25px}
+.metric>span{font-size:11px}
+.metric p{font-size:11px}
+.metric small{font-size:11px}
+.section-heading{align-items:flex-start;gap:12px}
+.section-heading h2{font-size:18px}
+.account-bonus{gap:5px;padding:7px;font-size:11px}
+.account-bonus .icon{width:13px;height:13px}
+.account-bonus strong{font-size:15px}
+.bonus-help p{inset-inline-end:-8px;width:235px}
+.fleet-toolbar{gap:10px}
+.data-note{font-size:11px}
+.taxi-grid{grid-template-columns:1fr;gap:13px}
+.taxi-card{padding:18px 20px 0}
+.taxi-top .ownership{font-size:11px}
+.state-pill{font-size:11px}
+.car-illustration{height:105px}
+.taxi-art{width:225px;height:96px}
+.taxi-card h3{font-size:17px}
+.car-hint,.trip-timer{font-size:11px}
+.quota-grid{margin-top:14px}
+.quota-grid span{font-size:11px}
+.quota-grid strong{font-size:23px}
+.car-details{font-size:11px}
+.history{margin-top:27px}
+.history-panel summary{padding:14px;gap:9px}
+.panel-title{font-size:11px}
+.panel-body{padding:0 15px 15px}
+.technical-list>div{grid-template-columns:1fr;gap:4px}
+.page-footer{flex-direction:column;gap:6px;font-size:11px}
+.empty-state{padding:32px 18px}
+.empty-state h2{font-size:15px}
+.empty-state p{font-size:11px}
+}
+
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}
+}
+
 '''
 
 PAGE_JS = '''
@@ -492,22 +908,64 @@ PAGE_JS = '''
     });
   });
   // End disclosure persistence.
+  // Filters affect only the already-rendered local cards; no network requests.
+  (function () {
+    var buttons = document.querySelectorAll('[data-filter]');
+    if (!buttons.length) return;
+    var cards = document.querySelectorAll('[data-car-kind]');
+    var empty = document.querySelectorAll('[data-filter-empty]');
+    function applyFilter(value) {
+      if (['all', 'owned', 'rented'].indexOf(value) === -1) value = 'all';
+      var visible = 0;
+      cards.forEach(function (card) {
+        card.hidden = value !== 'all' && card.dataset.carKind !== value;
+        if (!card.hidden) visible += 1;
+      });
+      buttons.forEach(function (button) { button.setAttribute('aria-pressed', String(button.dataset.filter === value)); });
+      empty.forEach(function (element) { element.hidden = visible !== 0; });
+      try { localStorage.setItem('taxi_filter', value); } catch (e) {}
+    }
+    var saved = 'all';
+    try { saved = localStorage.getItem('taxi_filter') || 'all'; } catch (e) {}
+    applyFilter(saved);
+    buttons.forEach(function (button) {
+      button.addEventListener('click', function () { applyFilter(button.dataset.filter); });
+    });
+  })();
+  document.querySelectorAll('a[href="#technicalPanel"]').forEach(function (link) {
+    link.addEventListener('click', function () {
+      document.querySelectorAll('#technicalPanel').forEach(function (panel) { panel.open = true; });
+    });
+  });
 '''
 
 
 def render():
     view = dashboard_view()
+    identity = esc(view['user'] or 'حساب اصلی تنظیم نشده')
     return f'''<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="30">
-      <title>Crypto Taxi — داشبورد اکانت اصلی</title><style>{PAGE_CSS}</style></head><body>
-      <header><div class="wrap header-row"><div class="brand"><span class="brand-icon" aria-hidden="true">🚕</span>
-        <div><h1>Crypto Taxi <span lang="en">Dashboard</span></h1><p>وضعیت اکانت اصلی و اطلاعات ثبت‌شده</p></div></div>
-        <span class="safe-badge">حالت امن · {operation_mode()}</span></div></header>
-      <main class="wrap">{status_section(view)}{account_data_section(view)}
-        <section class="history" aria-label="سوابق و رویدادها">{banned_accounts_section()}{events_section()}</section>
-      </main><footer class="wrap">{operation_mode()} · کلیم و رنت غیرفعال · بازخوانی صفحه هر ۳۰ ثانیه</footer>
-      <script>{PAGE_JS}</script></body></html>'''
-
+      <title>Crypto Taxi — تاکسی‌های من</title><style>{PAGE_CSS}</style></head><body>
+      <a class="skip-link" href="#mainContent">رفتن به محتوای اصلی</a><div class="app-shell">
+      <aside class="sidebar" aria-label="منوی اصلی"><a class="brand" href="#overview" aria-label="کریپتو تاکسی، نمای کلی">
+        <span class="brand-mark">{icon('car')}</span><div><span class="brand-name" lang="en" dir="ltr">Crypto Taxi</span><span class="brand-caption">PERSONAL GARAGE</span></div></a>
+        <span class="nav-caption">فضای کاری شما</span><nav>
+          <a class="nav-link" href="#overview" aria-current="page">{icon('grid')} نمای کلی</a>
+          <a class="nav-link" href="#taxis">{icon('car')} تاکسی‌های من</a>
+          <a class="nav-link" href="#history">{icon('history')} سوابق و راهنما</a></nav>
+        <div class="sidebar-bottom"><span class="private-label">{icon('lock')} حالت امن · تک‌اکانت</span>
+          <p>کلیم و رنت فعلاً غیرفعال‌اند.<br>این صفحه فقط اطلاعات محلی را نمایش می‌دهد.</p></div></aside>
+      <main id="mainContent" class="workspace"><header class="page-header"><div>
+        <div class="breadcrumb">مدیریت حساب <span>/</span> نمای کلی</div><h1>همه‌چیز، در یک نگاه.</h1>
+        <p class="mobile-identity"><bdi>{identity}</bdi></p></div>
+        <div class="header-actions"><div class="identity"><span class="avatar">{icon('lock')}</span>
+          <div><strong>حساب اصلی شما</strong><bdi>{identity}</bdi></div></div>
+          <a class="button" href="/">{icon('refresh')} بازخوانی صفحه</a></div></header>
+        {status_section(view)}{account_data_section(view)}
+        <section id="history" class="history" aria-label="سوابق و راهنما"><div class="history-heading">{icon('history')}<h2>سوابق و راهنما</h2><p>جزئیات بیشتر، فقط وقتی به آن‌ها نیاز دارید.</p></div>
+          {technical_section(view)}{banned_accounts_section()}{events_section()}</section>
+        <footer class="page-footer"><span>{icon('refresh')} بازخوانی صفحه هر ۳۰ ثانیه · بدون درخواست مستقیم به بازی</span><span>زمان‌ها به وقت تهران · کلیم و رنت غیرفعال</span></footer>
+      </main></div><script>{PAGE_JS}</script></body></html>'''
 
 class Handler(BaseHTTPRequestHandler):
     def send_json(self, payload, status=200):

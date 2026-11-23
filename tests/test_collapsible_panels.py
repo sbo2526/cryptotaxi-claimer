@@ -53,13 +53,13 @@ class CollapsiblePanelTests(unittest.TestCase):
         self.assert_native_panel(html, 'bannedAccountsPanel')
         self.assertIn('بدون سابقه', html)
 
-    def test_full_dashboard_has_two_unique_disclosures_and_no_email_access_text(self):
+    def test_full_dashboard_has_three_unique_disclosures_and_no_email_access_text(self):
         with patch.object(dashboard, 'load_json', side_effect=lambda path, default: default):
             html = dashboard.render()
         parser = PanelParser()
         parser.feed(html)
         self.assertEqual([p['attrs']['id'] for p in parser.panels],
-                         ['bannedAccountsPanel', 'eventsPanel'])
+                         ['technicalPanel', 'bannedAccountsPanel', 'eventsPanel'])
         self.assertNotIn('دسترسی به ایمیل‌های اکانت‌ها', html)
         self.assertNotIn('email-status', html)
 
