@@ -88,6 +88,16 @@ than ten minutes are labeled stale.
 Wallet, fleet count, recorded trips and reported readiness precede individual taxi
 cards, with personal taxis first. All/personal/rented filters run only in the
 browser and retain their selection across refreshes when storage is available.
+Each card explicitly distinguishes a recorded started trip from a car without an
+active trip in the last receive. Recorded trips have a large HH:MM:SS countdown,
+updated every second, with a server-rendered fallback and an explicit awaiting-new-
+data message after expiry (not an automatic claim of trip completion). A globally
+unknown start outcome is not mislabeled as not started. The worker saves a safe
+`start_check` reason from the same eligibility rule it uses before starting; idle
+cards explain missing permission/capacity, unknown old data, disabled automation,
+stale samples or a recorded service stop rather than promising a start. Personal
+cars retain priority; existing eligible rentals can also start, at most one per
+cycle with the existing pacing. Renting new cars remains disabled.
 Each card keeps quota details and the original site block message in a disclosure;
 the known Spanish not-your-turn message also has a Persian summary. Technical
 status and configuration guidance live in a separate collapsed panel, opened by

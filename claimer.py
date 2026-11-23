@@ -146,6 +146,8 @@ def car_snapshot(car, rented=False):
     return {
         'id': car.get('id'), 'name': car.get('name', 'تاکسی'), 'plate': car.get('plate', ''),
         'status': status, 'rented': rented,
+        # Explain the exact preflight decision in the UI, not canDrive alone.
+        'start_check': start_block(car, time.time() * 1000) or 'eligible',
         'ends_at': trip.get('endsAt'), 'started_at': trip.get('startedAt', 0),
         # Missing counts are unknown, not zero; quota and extra trips are
         # independent reported fields, not a computed eligibility decision.

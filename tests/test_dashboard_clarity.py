@@ -118,6 +118,49 @@ class DashboardClarityTests(unittest.TestCase):
             self.assertNotIn('fetch(', page)
             self.assertLess(page.index('id="overview"'), page.index('id="technicalPanel"'))
 
+    def test_started_car_has_large_timer_and_server_rendered_fallback(self):
+        end = int((NOW + timedelta(hours=2, minutes=3, seconds=4)).timestamp() * 1000)
+        car = {'status': 'on_trip', 'ends_at': end}
+        html = dashboard.car_card(car, self.view())
+        self.assertIn('استارت شده · سفر ثبت شده', html)
+        self.assertIn('02:03:04', html)
+        self.assertIn(f'data-ends="{end}"', html)
+        self.assertNotIn('استارت نشده', html)
+        self.assertIn('به پایان رسیده', dashboard.remaining_trip_text(int(NOW.timestamp()*1000), NOW))
+        for invalid in (None, 123, True, float('inf')):
+            html = dashboard.car_card({'status': 'on_trip', 'ends_at': invalid}, self.view())
+            self.assertIn('زمان پایان سفر مشخص نیست', html)
+            self.assertNotIn('data-ends=', html)
+
+    def test_unstarted_car_explains_real_preflight_reason_and_no_timer(self):
+        car = {'status': 'idle', 'start_check': 'no_confirmed_capacity', 'used': 10, 'limit': 10}
+        html = dashboard.car_card(car, self.view())
+        self.assertIn('استارت نشده در آخرین دریافت', html)
+        self.assertIn('اکسترای معتبر برای استارت تأیید نشده', html)
+        self.assertNotIn('data-ends=', html)
+        car['start_check'] = 'eligible'
+        self.assertIn('واجد شرایط در آخرین بررسی', dashboard.car_card(car, self.view()))
+        del car['start_check']
+        self.assertIn('آمادگی استارت هنوز تأیید نشده', dashboard.car_card(car, self.view()))
+
+    def test_unknown_mutation_never_claims_not_started_or_queues_retry(self):
+        view = self.view()
+        view['runtime'] = {'stage': 'stopped', 'code': 'start_unknown'}
+        html = dashboard.car_card({'status': 'idle', 'start_check': 'eligible'}, view)
+        self.assertIn('نتیجهٔ استارت نامشخص', html)
+        self.assertNotIn('استارت نشده', html)
+        self.assertNotIn('در نوبت بررسی خودکار', html)
+
+    def test_disabled_flag_is_actionable_and_priority_is_explained_when_enabled(self):
+        view = self.view([{'status': 'idle', 'start_check': 'eligible'}])
+        with patch.dict(os.environ, {'AUTO_START_TRIPS_ENABLED': 'false'}):
+            html = dashboard.account_data_section(view)
+        self.assertIn('AUTO_START_TRIPS_ENABLED=true', html)
+        self.assertIn('استارت خودکار خاموش است', html)
+        html = dashboard.account_data_section(view)
+        self.assertIn('تاکسی اصلی، سپس تاکسی‌های رنتی', html)
+        self.assertIn('حداکثر یک استارت', html)
+
     @unittest.skipUnless(shutil.which('node'), 'Node required for browser logic test')
     def test_filter_persistence_empty_results_invalid_values_and_blocked_storage(self):
         harness = r'''

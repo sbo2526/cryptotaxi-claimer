@@ -17,6 +17,7 @@ import os
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+from trip_rules import timestamp_ms
 from monitor_runtime import read_report
 from ban_detection import is_ban_error, is_confirmed_ban_record
 from runtime_config import (DATA_DIR, primary_username, monitoring_enabled, initialize_data,
@@ -480,7 +481,42 @@ def is_turn_block(car):
     return message == 'ahora no es tu turno con este taxi'
 
 
-def car_card(car):
+def start_explanation(car, view=None):
+    """Describe saved eligibility separately from configuration and actual starts."""
+    if view and (view['suspended'] or stop_code(view)):
+        return 'استارت خودکار متوقف است؛ علت توقف را بالای صفحه ببینید.'
+    if not monitoring_enabled() or not auto_start_enabled():
+        return 'استارت خودکار خاموش است؛ برای فعال‌سازی، راهنمای بالای تاکسی‌ها را ببینید.'
+    if view and view['label'] == 'پیکربندی پایش ناقص':
+        return 'تنظیمات لازم برای اجرای استارت کامل نیست.'
+    if view and view.get('runtime') and view['runtime']['stage'] in STARTUP_MESSAGES:
+        return 'شروع سرویس ثبت شده؛ دریافت و تأیید تازه لازم است.'
+    if view and view['stale']:
+        return 'اطلاعات قدیمی است؛ پیش از استارت باید وضعیت دوباره دریافت شود.'
+    check = car.get('start_check')
+    reasons = {
+        'invalid_car': 'شناسهٔ معتبر تاکسی ثبت نشده است.',
+        'not_permitted': 'اجازهٔ حرکت، نوبت یا سلامت تاکسی تأیید نشده است.',
+        'unknown_quota': 'سهمیهٔ قابل استفاده مشخص نیست؛ استارت انجام نمی‌شود.',
+        'no_confirmed_capacity': 'سفر عادی یا اکسترای معتبر برای استارت تأیید نشده است.',
+        'on_trip': 'سفر در بررسی قبلی ثبت شده؛ دریافت تازه لازم است.',
+    }
+    if check == 'eligible':
+        return 'واجد شرایط در آخرین بررسی؛ در نوبت بررسی خودکار، با اولویت تاکسی اصلی. اجرای فعلی سرویس تأیید نشده است.'
+    return reasons.get(check, 'آمادگی استارت هنوز تأیید نشده؛ دریافت تازه و بررسی سهمیه لازم است.')
+
+
+def remaining_trip_text(ends_at, now=None):
+    now = now or datetime.now(TZ)
+    seconds = max(0, math.floor(ends_at / 1000 - now.timestamp()))
+    if not seconds:
+        return 'زمان ثبت‌شدهٔ سفر به پایان رسیده؛ منتظر دریافت بعدی'
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f'زمان باقی‌ماندهٔ ثبت‌شده: {hours:02d}:{minutes:02d}:{seconds:02d}'
+
+
+def car_card(car, view=None):
     state = car.get('status', 'unavailable')
     rented = bool(car.get('rented'))
     name, plate = esc(car.get('name') or 'تاکسی بدون نام'), esc(car.get('plate') or 'پلاک ثبت نشده')
@@ -489,17 +525,23 @@ def car_card(car):
         label = 'نوبت شما نیست'
     tone = {'on_trip': 'blue', 'idle': 'green'}.get(state, 'gray')
     ends_at = car.get('ends_at')
-    if state == 'on_trip':
-        if finite_number(ends_at) and ends_at > 0:
-            detail = f'<p class="trip-timer" data-ends="{int(ends_at)}">زمان سفر از اطلاعات ثبت‌شده محاسبه می‌شود.</p>'
+    started = state == 'on_trip'
+    start_label = 'استارت شده · سفر ثبت شده' if started else 'استارت نشده در آخرین دریافت'
+    if not started and view and stop_code(view) == 'start_unknown':
+        start_label = 'نتیجهٔ استارت نامشخص؛ بررسی دستی لازم است'
+    if started:
+        if timestamp_ms(ends_at):
+            timer = remaining_trip_text(ends_at, view.get('now') if view else None)
+            detail = f'<p class="trip-timer" dir="auto" data-ends="{int(ends_at)}">{esc(timer)}</p>'
         else:
             detail = '<p class="car-hint">زمان پایان سفر مشخص نیست.</p>'
-    elif state == 'idle':
-        detail = '<p class="car-hint">اجرا فقط پس از تأیید شرایط استارت.</p>' if operation_mode() != 'فقط‌خواندنی' else '<p class="car-hint">استارت خودکار خاموش است.</p>'
-    elif is_turn_block(car):
-        detail = '<p class="car-hint">الان نوبت استفادهٔ شما از این تاکسی نیست.</p>'
+        detail += '<p class="trip-evidence">طبق آخرین دریافت؛ تایمر به‌تنهایی پایان یا شروع سفر بعدی را تأیید نمی‌کند.</p>'
     else:
-        detail = '<p class="car-hint">سایت فعلاً اجازهٔ حرکت نداده است.</p>'
+        explanation = start_explanation(car, view)
+        if is_turn_block(car):
+            explanation = 'الان نوبت استفادهٔ شما از این تاکسی نیست. ' + explanation
+        detail = f'<p class="car-hint">{esc(explanation)}</p>'
+    detail = f'<div class="start-state {"started" if started else "not-started"}"><strong>{start_label}</strong>{detail}</div>'
     message = esc(car.get('block_msg') or 'پیام محدودیتی ثبت نشده است.')
     kind = 'rented' if rented else 'owned'
     return f'''<article class="taxi-card {kind}" data-car-kind="{kind}">
@@ -530,10 +572,14 @@ def account_data_section(view):
     if not view['enabled']:
         note = 'اطلاعات ذخیره‌شده نمایش داده می‌شود؛ پایش خارجی خاموش است. ' + note
     owned = sum(not bool(car.get('rented')) for car in cars)
-    cards = ''.join(car_card(car) for car in sorted(cars, key=lambda car: bool(car.get('rented'))))
+    cards = ''.join(car_card(car, view) for car in sorted(cars, key=lambda car: bool(car.get('rented'))))
     if not cards:
         cards = '<p class="empty-inline">در آخرین دریافت، تاکسی‌ای برای این اکانت ثبت نشده است.</p>'
     filter_empty = '<p class="empty-inline" data-filter-empty hidden>تاکسی‌ای در این دسته ثبت نشده است.</p>' if cars else ''
+    if not view['enabled'] or not auto_start_enabled():
+        automation_note = 'استارت خودکار خاموش است؛ تاکسی‌های بدون سفر خودکار حرکت نمی‌کنند. برای فعال‌سازی در Railway، SITE_MONITORING_ENABLED=true و AUTO_START_TRIPS_ENABLED=true لازم است؛ تنظیمات ورود و دیتابیس هم باید کامل باشند.'
+    else:
+        automation_note = 'اولویت استارت: تاکسی اصلی، سپس تاکسی‌های رنتیِ مجاز با سهمیهٔ معتبر. در هر چرخه حداکثر یک استارت؛ موارد دیگر زودتر از ۵ دقیقه بررسی نمی‌شوند. فعال‌بودن تنظیم، تضمین اجرای فعلی نیست.'
     return f'''<section id="accountData" aria-labelledby="dataTitle">
       <div class="metrics" aria-label="خلاصهٔ حساب">
         <article class="metric wallet-metric">{icon('wallet')}<span>موجودی کیف پول</span><strong dir="ltr">{balance_html} <small>USDT</small></strong><p>موجودیِ آخرین دریافت</p></article>
@@ -544,6 +590,7 @@ def account_data_section(view):
       <div id="taxis" class="section-heading"><div><span class="eyebrow">ناوگان شما</span><h2 id="dataTitle">تاکسی‌های من</h2></div>
         <div class="account-bonus">{icon('bolt')}<span>اکسترای اکانت</span><strong class="account-bonus-count">{trip_count_text(sample.get('bonus_trips'))}</strong>
           <details class="bonus-help"><summary aria-label="توضیح اکسترای اکانت">؟</summary><p>اکسترای اکانت و هر تاکسی جدا گزارش شده‌اند؛ این اعداد را با هم جمع نمی‌کنیم. سهمیهٔ ۱۰ از ۱۰ هم به‌تنهایی پایان سفرهای اضافه نیست.</p></details></div></div>
+      <p class="automation-note">{esc(automation_note)} <a href="#technicalPanel">راهنما و علت توقف</a></p>
       <div class="fleet-toolbar"><div class="filters" role="group" aria-label="فیلتر تاکسی‌ها">
         <button type="button" data-filter="all" aria-pressed="true">همه <span>{len(cars)}</span></button>
         <button type="button" data-filter="owned" aria-pressed="false">شخصی <span>{owned}</span></button>
@@ -612,6 +659,16 @@ def events_section():
 
 
 PAGE_CSS = '''
+.automation-note{padding:14px 17px;border:1px solid #dce4ef;background:#edf2f9;border-radius:10px;color:#455b7c;font-size:12px;margin:0 0 18px;overflow-wrap:anywhere}
+.automation-note a{text-decoration:underline;white-space:nowrap}
+.start-state{background:#f6f8fb;border:1px solid #e5eaf2;border-radius:10px;padding:13px 10px;margin:15px 0;text-align:center}
+.start-state>strong{display:block;font-size:12px;color:#586b87}
+.start-state.started{background:#edf4ff;border-color:#dbe7fa}
+.start-state.started>strong{color:#3765b7}
+.start-state .trip-timer{font-size:17px;font-weight:bold;line-height:1.9;margin:9px 0;color:#2f5da6}
+.start-state .car-hint{font-size:11px;line-height:2;margin:8px 0 0;min-height:0}
+.trip-evidence{font-size:10px;color:#66748a;margin:7px 0 0}
+
 :root{color-scheme:light;--bg:#f5f6f8;--card:#fff;--ink:#202c40;--muted:#66748a;--line:#e6eaf0;--yellow:#f5bd45;--navy:#142137;--green:#21745a;--red:#ad3644;--amber:#94631c;--blue:#3765b7}
 
 *{box-sizing:border-box}
@@ -892,8 +949,9 @@ PAGE_JS = '''
       if (remaining <= 0) {
         element.textContent = 'زمان ثبت‌شدهٔ سفر به پایان رسیده؛ منتظر دریافت بعدی';
       } else {
-        var minutes = Math.floor(remaining / 60);
-        element.textContent = 'برآورد زمان باقی‌مانده: ' + minutes + ':' + String(remaining % 60).padStart(2, '0');
+        var hours = Math.floor(remaining / 3600);
+        var minutes = Math.floor((remaining % 3600) / 60);
+        element.textContent = 'زمان باقی‌ماندهٔ ثبت‌شده: ' + String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0') + ':' + String(remaining % 60).padStart(2, '0');
       }
     });
   }

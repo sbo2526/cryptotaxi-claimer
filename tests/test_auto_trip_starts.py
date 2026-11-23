@@ -166,6 +166,26 @@ class AutoStartTests(unittest.TestCase):
         self.assertEqual(self.calls(), ['state'])
         self.assertEqual(self.db.rows, {})
 
+    def test_active_owned_trip_is_not_restarted_and_eligible_rental_can_start(self):
+        self.session.post.side_effect = [
+            self.state(own=[ready(trip=self.trip)], rentals=[ready(2)]),
+            response({'trip': self.trip}),
+            self.state(own=[ready(trip=self.trip)], rentals=[ready(2, trip=self.trip)]),
+        ]
+        self.client.poll()
+        starts = [call.kwargs['json'] for call in self.session.post.call_args_list
+                  if call.args[0].endswith('/trips/start')]
+        self.assertEqual(starts, [{'carId': 2}])
+
+    def test_snapshot_explains_preflight_without_changing_eligibility(self):
+        self.session.post.return_value = self.state(own=[ready()], rentals=[ready(2, canDrive=False)])
+        self.client.poll(allow_start=False)
+        cars = json.loads(Path(claimer.STATUS_FILE).read_text())[PRIMARY]['cars']
+        self.assertEqual(cars[0]['start_check'], 'eligible')
+        self.assertEqual(cars[1]['start_check'], 'not_permitted')
+        self.assertEqual(self.calls(), ['state'])
+        self.assertEqual(self.db.rows, {})
+
     def test_direct_mutation_without_preflight_intent_is_rejected(self):
         with self.assertRaises(SafetyStop):
             self.client.request('trips/start', {'carId': 1})

@@ -71,15 +71,22 @@ const assert = require('node:assert/strict');
 const timers = [
   {dataset: {ends: '125000'}, textContent: ''},
   {dataset: {ends: '1'}, textContent: ''},
-  {dataset: {ends: 'bad'}, textContent: 'unchanged'}
+  {dataset: {ends: 'bad'}, textContent: 'unchanged'},
+  {dataset: {ends: '7321000'}, textContent: ''}
 ];
 vm.runInNewContext(SCRIPT, {
   document: {querySelectorAll: selector => selector.startsWith('.trip-timer') ? timers : []},
   Date: {now: () => 0 + 60000}, setInterval() {}
 });
-assert.equal(timers[0].textContent, 'برآورد زمان باقی‌مانده: 1:05');
+assert.equal(timers[0].textContent, 'زمان باقی‌ماندهٔ ثبت‌شده: 00:01:05');
 assert.equal(timers[1].textContent, 'زمان ثبت‌شدهٔ سفر به پایان رسیده؛ منتظر دریافت بعدی');
 assert.equal(timers[2].textContent, 'unchanged');
+assert.equal(timers[3].textContent, 'زمان باقی‌ماندهٔ ثبت‌شده: 02:01:01');
+vm.runInNewContext(SCRIPT, {
+  document: {querySelectorAll: selector => selector.startsWith('.trip-timer') ? timers : []},
+  Date: {now: () => 61000}, setInterval() {}
+});
+assert.equal(timers[0].textContent, 'زمان باقی‌ماندهٔ ثبت‌شده: 00:01:04');
 '''.replace('SCRIPT', json.dumps(dashboard.PAGE_JS))
         subprocess.run(['node', '-e', harness], check=True, capture_output=True, text=True)
 
