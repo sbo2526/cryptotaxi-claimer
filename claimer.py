@@ -719,6 +719,9 @@ def make_session(proxy=None):
     adapter = HTTPAdapter(max_retries=retry)
     s.mount("https://", adapter)
     s.mount("http://", adapter)
+    # Blind transport retries would bypass fresh permission checks. Let the
+    # application recheck state before retrying this state-changing endpoint.
+    s.mount(f"{BASE}/trips/start", HTTPAdapter(max_retries=0))
     if proxy:
         s.proxies.update(proxy)
     return s
@@ -786,13 +789,18 @@ def login(session, user):
 def api_post(session, endpoint, payload, user):
     """POST with session self-healing: on 401 re-login once and retry.
     On proxy connection error: report proxy dead, recreate session direct, retry once."""
+    def send():
+        if endpoint == "trips/start":
+            ensure_car_start_allowed(session, payload.get("carId"), user)
+        return session.post(f"{BASE}/{endpoint}", headers=HEADERS, json=payload, timeout=30)
+
     try:
-        r = session.post(f"{BASE}/{endpoint}", headers=HEADERS, json=payload, timeout=30)
+        r = send()
         check_account_suspension(r, user)
         if r.status_code == 401:
             log.warning("[%s] session expired (401) on %s -> re-logging in and retrying", user, endpoint)
             session = login(session, user)
-            r = session.post(f"{BASE}/{endpoint}", headers=HEADERS, json=payload, timeout=30)
+            r = send()
             check_account_suspension(r, user)
         return r
     except requests.exceptions.ConnectionError as e:
@@ -806,7 +814,7 @@ def api_post(session, endpoint, payload, user):
         session = make_session(proxy=None)  # direct, no proxy
         SESSIONS[user] = session
         session = login(session, user)
-        r = session.post(f"{BASE}/{endpoint}", headers=HEADERS, json=payload, timeout=30)
+        r = send()
         check_account_suspension(r, user)
         return r
 
@@ -815,6 +823,51 @@ def get_state(session, user):
     r = api_post(session, "state", {}, user)
     r.raise_for_status()
     return r.json()
+
+
+class CarNotReadyError(RuntimeError):
+    """A normal car/turn restriction: skip this car until the next sweep."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def car_start_block(car):
+    """Return (code, message), or (None, None) only with explicit permission."""
+    block = car.get("block")
+    if isinstance(block, dict):
+        code = block.get("code")
+        message = block.get("msg") or block.get("message")
+        if code or message or any(block.values()):
+            return str(code or "blocked"), str(message or "سرور اجازهٔ استارت این تاکسی را نداده است")
+    elif block:
+        return "blocked", str(block)
+    if car.get("broken"):
+        return "broken", "تاکسی خراب است"
+    if car.get("trip") is not None:
+        return "driving", "تاکسی در حال سفر است"
+    if car.get("canDrive") is not True:
+        return "permission", "در انتظار نوبت یا اجازهٔ رانندگی از سرور"
+    quota = car.get("quota") or {}
+    if not (quota.get("left", 0) > 0 or quota.get("bonus", 0) > 0):
+        return "quota", "سهمیهٔ سفر تاکسی تمام شده است"
+    return None, None
+
+
+def ensure_car_start_allowed(session, car_id, user):
+    """Recheck fresh server state before every start POST, including retries."""
+    if car_id is None:
+        raise CarNotReadyError("missing", "شناسهٔ تاکسی مشخص نیست")
+    state = get_state(session, user)
+    cars = (state.get("myCars") or []) + (state.get("rentedCars") or [])
+    car = next((item for item in cars if item.get("id") == car_id), None)
+    if car is None:
+        raise CarNotReadyError("missing", "تاکسی دیگر در فهرست قابل استفاده نیست")
+    code, message = car_start_block(car)
+    if code is not None:
+        raise CarNotReadyError(code, message)
 
 
 def start_trip(session, car_id, user):
@@ -1108,11 +1161,19 @@ def process_account(acc, status):
 
         car_infos = []
         ready = []
+
+        def wait_for_car(car_id, code, message):
+            log.info("[%s] taxi %s skipped until next sweep: %s", user, car_id, message)
+            for info in car_infos:
+                if info.get("id") == car_id:
+                    info.update(status="unavailable", block_code=code, block_msg=message)
+
         for car, is_rented in cars:
             car_id = car.get("id")
             name = car.get("name", str(car_id))
             plate = car.get("plate", "")
-            quota = car.get("quota", {})
+            quota = car.get("quota") or {}
+            block_code, block_msg = car_start_block(car)
             if car.get("trip"):
                 status_code = "on_trip"
                 ends_at = car["trip"].get("endsAt", 0)
@@ -1125,17 +1186,8 @@ def process_account(acc, status):
                     "used": quota.get("used", 0), "limit": quota.get("limit", 0),
                     "bonus": quota.get("bonus", 0), "bonus_expires_at": quota.get("bonusExpiresAt"),
                 })
-            elif (not car.get("broken")
-                  and car.get("trip") is None
-                  and (quota.get("left", 0) > 0 or quota.get("bonus", 0) > 0)):
-                # A car is "ready" to start a trip if it has quota remaining
-                # (or bonus trips), is not broken, and is not already on a trip.
-                # We do NOT rely on canDrive: the server sets canDrive=False
-                # on the own car when a rented car is already on a trip
-                # (block.code="driving"), but the server MAY accept a second
-                # concurrent trip (rented + own) in some cases (different
-                # model, stale flag, etc.). We attempt the start and let the
-                # server validate — if it rejects with 400, we skip gracefully.
+            elif block_code is None:
+                # Only explicit server permission with no block is startable.
                 status_code = "idle"
                 car_infos.append({
                     "id": car_id, "name": name, "plate": plate, "status": "idle",
@@ -1146,10 +1198,7 @@ def process_account(acc, status):
                 ready.append((car, is_rented))
             else:
                 status_code = "unavailable"
-                # Capture the block reason so the dashboard can show WHY
-                block = car.get("block", {})
-                block_code = block.get("code", "") if block else ""
-                block_msg = block.get("msg", "") if block else ""
+                # Keep server/local restriction visible, without an error or ban.
                 car_infos.append({
                     "id": car_id, "name": name, "plate": plate, "status": "unavailable",
                     "ends_at": None, "minutes_left": 0, "rented": is_rented,
@@ -1158,12 +1207,8 @@ def process_account(acc, status):
                     "block_code": block_code, "block_msg": block_msg,
                 })
 
-        # Priority: own car FIRST, then rented cars.
-        # Use the own (main) car first. When the own car finishes its trip
-        # AND its extra/bonus trips are exhausted, move on to rented cars.
-        # The server MAY accept both (own + rented) or reject the second one
-        # with a 400 — we attempt both independently, each 400 is logged and
-        # skipped without affecting the other car's start attempt.
+        # Prefer the own car, then rented. api_post refreshes permission before
+        # each start, so starting the first car cannot authorize a stale second one.
         own_ready = [c for c, is_r in ready if not is_r]
         rented_ready = [c for c, is_r in ready if is_r]
         to_start = []
@@ -1174,7 +1219,7 @@ def process_account(acc, status):
         if not to_start:
             log.info("[%s] no idle car to start (all on trip / quota full / shift)", user)
         else:
-            log.info("[%s] attempting to start up to 2 cars (own first, then rented): %s",
+            log.info("[%s] rechecking up to 2 permitted cars (own first, then rented): %s",
                      user, [c.get("name", c.get("id")) for c in to_start])
             for car in to_start:
                 car_id = car.get("id")
@@ -1195,7 +1240,9 @@ def process_account(acc, status):
                         session = login(session, user)
                         r = start_trip(session, car_id, user)
                     if r.status_code == 400:
-                        err_msg = r.json().get("error", {}).get("message", "400 Bad Request")
+                        error = r.json().get("error")
+                        err_msg = (error.get("message") if isinstance(error, dict) else str(error or "")) or "400 Bad Request"
+                        wait_for_car(car_id, "server_rejected", err_msg)
                         record(f"start rejected (400) for {name}",
                                why=f"سرور استارت را رد کرد: {err_msg}", level="warning")
                         continue
@@ -1223,6 +1270,8 @@ def process_account(acc, status):
                                 cinfo["started_at"] = trip.get("startedAt", 0)
                                 cinfo["minutes_left"] = round((cinfo["ends_at"] - now) / 60000)
                         time.sleep(2)
+                except CarNotReadyError as e:
+                    wait_for_car(car_id, e.code, e.message)
                 except requests.exceptions.ConnectionError as e:
                     msg = short_err(e)
                     log.warning("[%s] connection error starting %s (%s): %s -> retrying once in 10s",
@@ -1250,6 +1299,8 @@ def process_account(acc, status):
                                     cinfo["ends_at"] = trip.get("endsAt", 0)
                                     cinfo["started_at"] = trip.get("startedAt", 0)
                                     cinfo["minutes_left"] = round((cinfo["ends_at"] - now) / 60000)
+                    except CarNotReadyError as e2:
+                        wait_for_car(car_id, e2.code, e2.message)
                     except Exception as e2:
                         log.error("[%s] start FAILED for %s (%s) after retry: %s", user, name, car_id, e2)
                         record(f"start failed after retry: {name} — {short_err(e2)}",
@@ -1358,7 +1409,7 @@ def process_account(acc, status):
             acc_stat["earnings_today"] = earned_today
             acc_stat["earnings_total"] = acc_stat.get("earnings_total", 0) + earned_total
         log.info("[%s] sweep: %d car(s) on trip, %d idle -> %d started, %d mission(s) claimed, %d referral trip(s) claimed, %d error(s)",
-                 user, sum(1 for c in car_infos if c["status"] == "on_trip"), len(ready), trips_started, missions_claimed, referrals_claimed, errors_today)
+                 user, sum(1 for c in car_infos if c["status"] == "on_trip"), sum(1 for c in car_infos if c["status"] == "idle"), trips_started, missions_claimed, referrals_claimed, errors_today)
 
     # run the sweep with one retry on transient connection errors
     sweep_success = False

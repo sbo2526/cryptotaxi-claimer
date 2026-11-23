@@ -71,3 +71,16 @@ failures alone never authorize deletion.
 Legacy archive/status entries based only on 403 or failure counts are retained as
 unconfirmed history but no longer remove or hide an existing active account.
 Previously deleted credentials are not reconstructed or restored automatically.
+
+## Taxi start permission
+
+A taxi is eligible only when `canDrive` is explicitly `true`, no `block` is
+active, it has no current trip, is not broken, and has quota or bonus trips left.
+The same checks run against fresh server state immediately before every start
+POST, including authentication, connection and rate-limit retries. Own cars keep
+priority, but starting one never authorizes starting another from stale state.
+
+Restricted cars are skipped until the next sweep, without counting normal turn
+restrictions as account errors or bans. The dashboard shows the recorded block
+reason. The server can still reject a request if its state changes between the
+check and the start; a 400 is not retried immediately or treated as a ban.
