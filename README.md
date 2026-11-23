@@ -1,13 +1,14 @@
-# Crypto Taxi — protected, opt-in read-only monitor
+# Crypto Taxi — protected primary-account monitor and optional trip starts
 
 ## Safety defaults
 
 - **All website traffic is OFF by default.** The supervisor starts only the dashboard.
-- Registration, fake referrals, disposable-email creation, proxy rotation, trip
-  starts, rentals and reward claims have been removed. There is no environment
-  switch to re-enable mutation endpoints.
-- The only external endpoints implemented are `auth/login` and `state`. Reading
-  a website/API may also require permission: obtain that permission before opt-in.
+- Registration, fake referrals, disposable-email creation, proxy rotation,
+  rentals and reward claims remain removed.
+- Monitoring alone permits only `auth/login` and `state`. The separately opted-in
+  `AUTO_START_TRIPS_ENABLED=true` adds only the guarded `trips/start` path. Reading
+  or automating a website/API may require permission: obtain that permission
+  before enabling either mode.
 - The owner-selected sole permitted identity is `bavafasobhan@gmail.com`.
   `PRIMARY_ACCOUNT` must explicitly match that identity (surrounding whitespace
   is trimmed; the identity otherwise matches exactly). An unset or different
@@ -29,7 +30,8 @@
   maximum 6-hour periodic check. With no active trips or an invalid/unknown timer,
   the fallback is 30 minutes (or an earlier known trip). Only numeric millisecond
   timestamps are used. Expired timers cause a delayed **state read**, never an
-  assumed completion, automatic claim or trip start. Timers in the dashboard
+  assumed completion or automatic claim. When trip starts are separately enabled,
+  only a freshly verified eligible idle car may start. Timers in the dashboard
   count down locally without site requests. These are conservative application
   defaults, NOT the site's published limits, permission or a guarantee against bans.
 - 429/503 respect numeric or HTTP-date `Retry-After` with at least a 5-minute
@@ -135,6 +137,54 @@ an empty local state alone does not establish why the data is absent. The empty
 state and missing receive time now refer to **local stored evidence**, not a claim
 that this account has never successfully received information anywhere.
 
+### Optional automatic trip starts — separate explicit opt-in
+
+The owner requested **automatic starts only**, not restoration of mission claims,
+referral claims, rentals or fake-account/referral automation. The start endpoint,
+`{carId}` payload and eligibility fields were recovered from the earlier project
+commit `a0460df`; historical code is not proof of today's API contract or site
+permission. No live website mutation was performed during development.
+
+Set `AUTO_START_TRIPS_ENABLED=true` on the one retained Railway service **only if
+site rules permit automation**, after read-only monitoring works. It defaults to
+off; without `SITE_MONITORING_ENABLED=true` no website action is permitted at all.
+To disable future starts, remove/set the start flag to `false` and apply/redeploy;
+an already in-flight operation cannot be recalled. Do not repeatedly redeploy or
+restart while investigating an uncertain result. Dashboard labels describe the
+configuration, not a guarantee that a worker is running.
+
+The worker reuses the same session and shared owner/budget for every request:
+
+1. Read and validate current state. Prefer eligible owned cars, then rented cars.
+   A car needs an ID, explicit `canDrive=true`, no block/broken/active trip and
+   positive reported `quota.left` or unexpired `quota.bonus`. Never infer capacity
+   from `limit-used` or copy the account bonus pool to every car.
+2. Start at most **one car per cycle**. Recheck policy/ownership/suspension and
+   eligibility after pacing; the state response may be at most 90 seconds old
+   at dispatch. No known unsupported endpoint probing or HTTP retries.
+3. Persist an intent in the same PostgreSQL database **before** the single POST.
+   The DB user also needs create/use permission for `cryptotaxi_trip_starts`.
+4. Validate the returned trip's start/end timestamps, then read state again with
+   the same request pacing and observe that exact trip. Only then is this episode
+   eligible to be replaced once the server later reports the car idle/allowed.
+5. If another eligible car remains, check again after at least five minutes;
+   otherwise use the nearest trip-end schedule. This is not a burst-start loop.
+
+The journal is keyed by hashed account identity and car ID. Pending or confirmed
+but unobserved intents survive process restarts and loss of the local volume.
+Timeouts, malformed replies, denied starts and unverified outcomes stop the worker
+and **are not automatically replayed**, including 429/503 on a start; server
+cooldowns are still persisted. A read-side cooldown before dispatch may postpone
+work and cause a new state read, but never reissues a sent start. Confirmed
+suspension still stops all operations. Do not delete journal rows to force retries:
+inspect actual game state and logs first. This is conservative duplicate
+prevention, not an exactly-once API guarantee or a guarantee against bans.
+
+The browser remains a local-data viewer: page refreshes/GETs/POSTs do not dispatch
+starts, and unsupported mutation routes remain disabled. No site credentials or
+sessions are recovered from Git history. Mission/referral `claim` and `market/rent`
+remain unavailable even with the trip-start flag on.
+
 ### Optional read-only monitoring — ONLY after API permission is confirmed
 
 | Variable | Purpose |
@@ -206,4 +256,7 @@ Tests use mocks/temporary state and local HTTP only; they do not access account
 APIs. Shared-lock unit tests simulate PostgreSQL ownership; a production shared
 PostgreSQL connection and Railway replica/volume configuration must still be
 verified by the deployment administrator. Automated trading/claiming code and its
-old execution tests have been replaced with read-only policy/security tests.
+old execution tests have been replaced with policy/security and guarded-start
+tests. Start tests simulate the durable SQL state machine and HTTP replies; real
+PostgreSQL schema integration and the current game API contract still require
+operator validation.

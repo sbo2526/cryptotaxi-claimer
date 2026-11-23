@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Protected read-only dashboard: configuration, real data freshness and history.
+"""Protected local-file dashboard: configuration, real data freshness and history.
 
 Rendering and browser refreshes read local files only; they never enable or call
 external monitoring. Missing/invalid account data is not presented as zero.
@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 from monitor_runtime import read_report
 from ban_detection import is_ban_error, is_confirmed_ban_record
 from runtime_config import (DATA_DIR, primary_username, monitoring_enabled, initialize_data,
-                            ALLOWED_PRIMARY_ACCOUNT)
+                            ALLOWED_PRIMARY_ACCOUNT, auto_start_enabled)
 
 TZ = ZoneInfo('Asia/Tehran')
 PORT = int(os.environ.get('PORT', '8080'))
@@ -174,6 +174,8 @@ def finite_number(value):
 
 
 STOP_MESSAGES = {
+    'start_unknown': 'نتیجهٔ استارت یا تأیید آن نامشخص است؛ تلاش در دیتابیس محفوظ می‌ماند و خودکار تکرار نمی‌شود. وضعیت تاکسی و لاگ اجرا را برای رسیدگی دستی بررسی کنید.',
+    'start_blocked': 'اجازه، سهمیه یا تازگی اطلاعات برای استارت تأیید نشد؛ پایش برای بررسی متوقف شده است.',
     'invalid_config': 'تنظیم اکانت، رمز یا اتصال دیتابیس ناقص یا نامعتبر است؛ Variables همین سرویس را بررسی کنید.',
     'database_error': 'اتصال یا آماده‌سازی دیتابیس قفل ناموفق بوده است؛ اتصال PostgreSQL و دسترسی آن را بررسی کنید. هیچ ورود جدیدی به سایت انجام نشد.',
     'already_running': 'اجرای دیگری قفل این اکانت را دارد؛ این اجرا به سایت وارد نشد. سرویس یا Replica تکراری و هم‌پوشانی استقرارها را بررسی کنید؛ قفل را حذف نکنید.',
@@ -194,6 +196,7 @@ STARTUP_MESSAGES = {
 }
 
 SCHEDULE_REASONS = {
+    'ready_trip': 'بررسی تاکسی بعدی برای استارت مجاز',
     'trip_end': 'بر اساس پایان سفر ثبت‌شده',
     'unknown_timer': 'زمان سفر نامشخص است؛ بررسی دوره‌ای',
     'no_active_trip': 'سفر فعالی ثبت نشده؛ بررسی دوره‌ای',
@@ -303,6 +306,8 @@ def dashboard_view(status=None, now=None):
         empty_note = STOP_MESSAGES.get(runtime['code'], STOP_MESSAGES['manual_review'])
     elif activity and activity['status'] in ('stopped', 'suspended'):
         empty_note = activity['message']
+    elif auto_start_enabled():
+        empty_note = 'بدون وضعیت معتبر، استارت انجام نمی‌شود؛ کلیم و رنت غیرفعال‌اند.'
     else:
         empty_note = 'دریافت موفقی ثبت نشده است؛ هیچ عملیات استارت، اجاره یا دریافت جایزه انجام نمی‌شود.'
     if sample is None:
@@ -310,6 +315,12 @@ def dashboard_view(status=None, now=None):
     return {'user': user, 'enabled': enabled, 'suspended': suspended, 'sample': sample,
             'received': received, 'stale': stale, 'label': label, 'tone': tone, 'note': note,
             'empty_note': empty_note, 'activity': activity, 'runtime': runtime}
+
+
+def operation_mode():
+    if monitoring_enabled() and auto_start_enabled() and primary_username():
+        return 'استارت خودکار در تنظیمات فعال است'
+    return 'فقط‌خواندنی'
 
 
 def status_section(view):
@@ -344,10 +355,11 @@ def car_card(car):
     if status == 'on_trip' and finite_number(ends_at) and ends_at > 0:
         detail = f'<p class="trip-timer" data-ends="{int(ends_at)}">زمان باقی‌مانده بر اساس اطلاعات ثبت‌شده</p>'
     elif status == 'idle':
-        detail = '<p>استارت خودکار غیرفعال است.</p>'
+        detail = '<p>استارت خودکار در تنظیمات فعال است؛ نوبت، سهمیه و وضعیت تازه پیش از اجرا بررسی می‌شوند.</p>' if operation_mode() != 'فقط‌خواندنی' else '<p>استارت خودکار غیرفعال است.</p>'
     else:
         detail = f'<p>{esc(car.get("block_msg") or "جزئیات بیشتری از محدودیت ثبت نشده است.")}</p>'
-    quota = f'''<p class="muted">سهمیهٔ ثبت‌شده (مصرف‌شده از سقف):
+    quota = f'''<p class="muted">سفر عادی باقیماندهٔ گزارش‌شده: {trip_count_text(car.get('left'))}</p>
+      <p class="muted">سهمیهٔ ثبت‌شده (مصرف‌شده از سقف):
       <span class="quota-count">{trip_count_text(car.get('used'))} از {trip_count_text(car.get('limit'))}</span></p>
       <p class="muted">سفر اضافهٔ این تاکسی (مقدار ثبت‌شده):
       <span class="car-bonus-count">{trip_count_text(car.get('bonus'))}</span></p>'''
@@ -367,11 +379,13 @@ def account_data_section(view):
     balance = wallet.get('usdt')
     balance_html = f'{balance:,.4f}' if finite_number(balance) and balance >= 0 else '—'
     note = 'این اطلاعات قدیمی است و وضعیت فعلی سایت را تأیید نمی‌کند.' if view['stale'] else 'اطلاعات بر اساس آخرین دریافت موفق است؛ هیچ عملیات خودکاری انجام نمی‌شود.'
+    if view['enabled'] and auto_start_enabled():
+        note = ('این اطلاعات قدیمی است؛ ' if view['stale'] else '') + 'استارت خودکار در تنظیمات فعال است؛ فقط پس از بررسی وضعیت تازهٔ سایت اجرا می‌شود. کلیم و رنت غیرفعال‌اند.'
     if not view['enabled']:
         note = 'اطلاعات ذخیره‌شده نمایش داده می‌شود؛ پایش خارجی خاموش است. ' + note
     cards = ''.join(car_card(car) for car in cars) or '<p class="empty-inline">در آخرین دریافت، تاکسی‌ای برای این اکانت ثبت نشده است.</p>'
     return f'''<section id="accountData" aria-labelledby="dataTitle">
-      <div class="section-heading"><h2 id="dataTitle">اطلاعات اکانت اصلی</h2><span class="tag">فقط‌خواندنی</span></div>
+      <div class="section-heading"><h2 id="dataTitle">اطلاعات اکانت اصلی</h2><span class="tag">{operation_mode()}</span></div>
       <p class="data-note">{note}</p><div class="metrics">
         <article class="metric"><span>موجودی USDT</span><strong dir="ltr">{balance_html}</strong></article>
         <article class="metric"><span>تاکسی‌های ثبت‌شده</span><strong>{len(cars)}</strong></article>
@@ -485,13 +499,13 @@ def render():
     view = dashboard_view()
     return f'''<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="30">
-      <title>Crypto Taxi — داشبورد فقط‌خواندنی</title><style>{PAGE_CSS}</style></head><body>
+      <title>Crypto Taxi — داشبورد اکانت اصلی</title><style>{PAGE_CSS}</style></head><body>
       <header><div class="wrap header-row"><div class="brand"><span class="brand-icon" aria-hidden="true">🚕</span>
         <div><h1>Crypto Taxi <span lang="en">Dashboard</span></h1><p>وضعیت اکانت اصلی و اطلاعات ثبت‌شده</p></div></div>
-        <span class="safe-badge">حالت امن · فقط‌خواندنی</span></div></header>
+        <span class="safe-badge">حالت امن · {operation_mode()}</span></div></header>
       <main class="wrap">{status_section(view)}{account_data_section(view)}
         <section class="history" aria-label="سوابق و رویدادها">{banned_accounts_section()}{events_section()}</section>
-      </main><footer class="wrap">فقط‌خواندنی · عملیات خودکار غیرفعال · بازخوانی صفحه هر ۳۰ ثانیه</footer>
+      </main><footer class="wrap">{operation_mode()} · کلیم و رنت غیرفعال · بازخوانی صفحه هر ۳۰ ثانیه</footer>
       <script>{PAGE_JS}</script></body></html>'''
 
 

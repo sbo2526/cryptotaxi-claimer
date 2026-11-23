@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Opt-in, single-account, read-only monitor. No start/rent/claim/registration.
+"""Opt-in primary-account monitor with separately opted-in automatic trip starts.
+No rent/claim/registration or automatic re-login.
 
 External access is OFF by default. Enabling it requires API permission from the
 site, a primary account configured in environment variables and exclusive
@@ -24,7 +25,8 @@ from ban_detection import is_ban_error, is_confirmed_ban_record, suspension_reas
 from monitor_safety import (SafetyStop, RetryLater, RequestPacer, SharedMonitorLock,
                             check_policy, retry_after_seconds)
 from monitor_runtime import write_report
-from runtime_config import DATA_DIR, initialize_data, monitoring_enabled, primary_username
+from runtime_config import DATA_DIR, initialize_data, monitoring_enabled, primary_username, auto_start_enabled
+from trip_rules import start_block, valid_car_id, timestamp_ms
 
 BASE = 'https://thecryptotaxi.com/api'
 TZ = ZoneInfo('Asia/Tehran')
@@ -148,7 +150,8 @@ def car_snapshot(car, rented=False):
         # Missing counts are unknown, not zero; quota and extra trips are
         # independent reported fields, not a computed eligibility decision.
         'used': quota.get('used'), 'limit': quota.get('limit'),
-        'bonus': quota.get('bonus'),
+        'bonus': quota.get('bonus'), 'left': quota.get('left'),
+        'bonus_expires_at': quota.get('bonusExpiresAt'),
         'block_code': block.get('code', '') if isinstance(block, dict) else 'blocked',
         'block_msg': ((block.get('msg') or block.get('message') or '')
                       if isinstance(block, dict) else str(block)),
@@ -156,6 +159,7 @@ def car_snapshot(car, rented=False):
 
 
 class ReadOnlyMonitor:
+    """Legacy class name; trip mutation still requires its own explicit opt-in."""
     def __init__(self, user, ownership, session=None, pacer=None):
         self.user, self.ownership = user, ownership
         self.session = session or requests.Session()
@@ -165,13 +169,18 @@ class ReadOnlyMonitor:
         self.pacer = pacer or RequestPacer()
         self.stopped = False
         self.login_attempted = False
+        self._start_intent = None
+        self._raw_cars = []
+        self._state_received = None
+        self._observed_starts = set()
 
     def stop(self):
         self.stopped = True
         self.session.close()
 
     def request(self, endpoint, payload):
-        # There is no public arbitrary URL or mutation endpoint path.
+        # Only the dedicated validated start path can authorize a mutation.
+        mutation_started = False
         try:
             check_policy(self.user, endpoint)
             if endpoint == 'auth/login':
@@ -191,6 +200,24 @@ class ReadOnlyMonitor:
             if self.stopped or is_suspended(self.user):
                 raise SafetyStop('Account monitoring is stopped')
             self.ownership.before_request()  # Budget survives process/service restarts.
+            if endpoint == 'trips/start':
+                intent = self._start_intent
+                if (not intent or not isinstance(payload, dict) or not valid_car_id(payload.get('carId'))
+                        or payload != {'carId': intent['car']['id']}
+                        or self._state_received is None
+                        or not 0 <= time.monotonic() - self._state_received <= 90
+                        or start_block(intent['car'], time.time() * 1000) is not None):
+                    raise SafetyStop('Trip start requires fresh explicit driving permission', 'start_blocked')
+                self.ownership.reserve_trip_start(payload['carId'])
+                mutation_started = True  # Persisted BEFORE the one possible send.
+                # Reserving the durable intent may itself block on storage.
+                # Recheck immediately before dispatch, without retrying a POST.
+                check_policy(self.user, endpoint)
+                self.ownership.check()
+                if (self.stopped or is_suspended(self.user)
+                        or not 0 <= time.monotonic() - self._state_received <= 90
+                        or start_block(intent['car'], time.time() * 1000) is not None):
+                    raise SafetyStop('Start preflight expired before dispatch', 'start_unknown')
             result = self.session.post(
                 f'{BASE}/{endpoint}', json=payload, timeout=30, allow_redirects=False,
                 headers={'Content-Type': 'application/json', 'X-CT': '1', 'X-CT-Lang': 'es'},
@@ -205,6 +232,8 @@ class ReadOnlyMonitor:
                 delay = retry_after_seconds(result.headers.get('Retry-After'))
                 self.ownership.cooldown(delay)
                 self.pacer.cooldown(delay)
+                if mutation_started:
+                    raise SafetyStop('Trip-start outcome needs manual review; cooldown persisted', 'start_unknown')
                 raise RetryLater(delay)  # No immediate reissue, login or IP change.
             if result.status_code == 401:
                 raise SafetyStop('Session rejected; manual login review required', 'needs_login')
@@ -216,16 +245,31 @@ class ReadOnlyMonitor:
             data = result.json()
             if not isinstance(data, dict) or data.get('error'):
                 raise SafetyStop('Unexpected API error; manual review required')
+            if mutation_started:
+                trip = data.get('trip')
+                now_ms = time.time() * 1000
+                if (not isinstance(trip, dict) or not timestamp_ms(trip.get('startedAt'))
+                        or not timestamp_ms(trip.get('endsAt'))
+                        or trip['startedAt'] > now_ms + 30000
+                        or trip['endsAt'] <= max(trip['startedAt'], now_ms)):
+                    raise SafetyStop('Trip start was not verifiably confirmed', 'start_unknown')
+                self.ownership.confirm_trip_start(payload['carId'], trip['startedAt'], trip['endsAt'])
             return data
-        except SafetyStop:
+        except SafetyStop as error:
             self.stop()
+            if mutation_started and error.code not in ('suspended', 'needs_login', 'access_denied', 'start_unknown'):
+                raise SafetyStop('Trip-start outcome needs manual review; never replay automatically', 'start_unknown') from None
             raise
         except RetryLater:
+            if mutation_started:
+                self.stop()
+                raise SafetyStop('Trip-start outcome needs manual review', 'start_unknown') from None
             raise
         except Exception:
             self.stop()
             # No driver/HTTP exception bodies, URLs with tokens or credentials in logs.
-            raise SafetyStop('Monitoring failed; no automatic retry, manual review required') from None
+            code = 'start_unknown' if mutation_started else 'manual_review'
+            raise SafetyStop('Monitoring failed; no automatic retry, manual review required', code) from None
 
     def login(self):
         password = os.environ.get('PRIMARY_ACCOUNT_PASSWORD', '')
@@ -234,14 +278,25 @@ class ReadOnlyMonitor:
             raise SafetyStop('PRIMARY_ACCOUNT_PASSWORD is required')
         return self.request('auth/login', {'username': self.user, 'password': password})
 
-    def poll(self):
+    def start_trip(self, car_id):
+        car = next((car for car in self._raw_cars if car.get('id') == car_id), None)
+        if (not valid_car_id(car_id) or not auto_start_enabled() or not car or start_block(car, time.time() * 1000) is not None):
+            raise SafetyStop('Car is not explicitly eligible for trip start', 'start_blocked')
+        self._start_intent = {'car': car}
+        try:
+            return self.request('trips/start', {'carId': car_id})
+        finally:
+            self._start_intent = None
+
+    def poll(self, allow_start=True):
         state = self.request('state', {})
+        received_at = time.monotonic()
         try:
             # Reject login-shaped, partial or malformed responses, rather than
             # overwriting a good snapshot with fabricated empty account data.
             if not any(key in state for key in ('myCars', 'rentedCars')):
                 raise ValueError('Missing car collections')
-            cars = []
+            cars, raw_cars = [], []
             for key, rented in (('myCars', False), ('rentedCars', True)):
                 collection = state.get(key, [])
                 if not isinstance(collection, list):
@@ -252,6 +307,7 @@ class ReadOnlyMonitor:
                         for field in ('trip', 'quota')
                     ):
                         raise ValueError('Invalid car record')
+                    raw_cars.append(car)
                     cars.append(car_snapshot(car, rented))
             balances, stats = state.get('balances', {}), state.get('stats', {})
             if not isinstance(balances, dict) or not isinstance(stats, dict):
@@ -260,7 +316,7 @@ class ReadOnlyMonitor:
             timestamp = datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')
             # Whitelist fields; no session/cookie/token/password persistence.
             snapshot = {
-                '_meta': {'monitor_status': 'read_only', 'monitor_user': self.user, 'date': timestamp[:10]},
+                '_meta': {'monitor_status': 'trip_starts' if auto_start_enabled() else 'read_only', 'monitor_user': self.user, 'date': timestamp[:10]},
                 self.user: {'last_run': timestamp, 'last_result': 'OK', 'cars': cars,
                             'wallet': {'usdt': balances.get('usdt'), 'cash': balances.get('efectivo')},
                             'bonus_trips': state.get('bonusTrips'),
@@ -271,6 +327,30 @@ class ReadOnlyMonitor:
                 if self.stopped or is_suspended(self.user):
                     raise SafetyStop('Suspension prevents publishing an active snapshot', 'suspended')
                 atomic_save_json(STATUS_FILE, snapshot)
+            self._raw_cars, self._state_received = raw_cars, received_at
+            self._observed_starts = set()
+            if auto_start_enabled():
+                ids = [str(car['id']) for car in raw_cars if valid_car_id(car.get('id'))]
+                if len(ids) != len(set(ids)):
+                    raise SafetyStop('Ambiguous duplicate car identities', 'start_blocked')
+                for car in raw_cars:
+                    trip = car.get('trip')
+                    if (valid_car_id(car.get('id')) and isinstance(trip, dict)
+                            and timestamp_ms(trip.get('startedAt')) and timestamp_ms(trip.get('endsAt'))):
+                        if self.ownership.observe_trip_start(car['id'], trip['startedAt'], trip['endsAt']):
+                            self._observed_starts.add(str(car['id']))
+                self.ownership.ensure_no_unresolved_starts()
+                ready = [car for car in raw_cars if start_block(car, time.time() * 1000) is None]
+                if allow_start and ready:
+                    # myCars precede rentedCars; at most ONE start per cycle.
+                    car_id = ready[0]['id']
+                    self.start_trip(car_id)
+                    plan = self.poll(allow_start=False)  # Same session, paced state verification.
+                    if str(car_id) not in self._observed_starts:
+                        raise SafetyStop('Started trip not observed in fresh state', 'start_unknown')
+                    return plan
+                if ready and delay > MIN_POLL_SECONDS:
+                    delay, reason = MIN_POLL_SECONDS, 'ready_trip'
             return delay, reason
         except SafetyStop:
             self.stop()
@@ -354,7 +434,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
     initialize_data()
     if not monitoring_enabled():
-        log.info('External monitoring disabled. Automatic actions have been removed.')
+        log.info('External monitoring disabled. No website actions will run.')
         return
     write_report('starting')
     user = primary_username()
