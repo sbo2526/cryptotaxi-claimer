@@ -7,10 +7,14 @@ HERE = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get('DATA_DIR', str(HERE / 'data'))).resolve()
 ACCOUNT_CREATION_ENABLED = False  # Removed, not configurable.
 AUTOMATIC_ACTIONS_ENABLED = False  # No start/rent/claim endpoints are permitted.
+# Owner-selected public identity only. The password stays in Railway Variables.
+# An old PRIMARY_ACCOUNT value must not silently select a different account.
+ALLOWED_PRIMARY_ACCOUNT = 'bavafasobhan@gmail.com'
 
 
 def primary_username():
-    return os.environ.get('PRIMARY_ACCOUNT', '').strip()
+    configured = os.environ.get('PRIMARY_ACCOUNT', '').strip()
+    return configured if configured == ALLOWED_PRIMARY_ACCOUNT else ''
 
 
 def monitoring_enabled():

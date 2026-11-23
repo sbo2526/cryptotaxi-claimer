@@ -8,7 +8,12 @@
   switch to re-enable mutation endpoints.
 - The only external endpoints implemented are `auth/login` and `state`. Reading
   a website/API may also require permission: obtain that permission before opt-in.
-- Only `PRIMARY_ACCOUNT`, explicitly set in the environment, may authenticate.
+- The owner-selected sole permitted identity is `bavafasobhan@gmail.com`.
+  `PRIMARY_ACCOUNT` must explicitly match that identity (surrounding whitespace
+  is trimmed; the identity otherwise matches exactly). An unset or different
+  value selects **no account** and prevents login, even when monitoring is opted
+  in. Changing Variables alone cannot enable another identity. The public identity
+  is pinned in `runtime_config.py`; passwords remain exclusively in Variables.
   No account credentials are loaded from JSON or selected from old status data.
 - The monitor never automatically restarts after suspension, access denial,
   network failure, malformed state or loss of lock ownership.
@@ -48,7 +53,7 @@
 |---|---|
 | `DASHBOARD_USER` | Your private dashboard login name |
 | `DASHBOARD_PASSWORD` | Unique randomly generated password, at least 16 characters |
-| `PRIMARY_ACCOUNT` | Exact username/email of your ONE primary website account |
+| `PRIMARY_ACCOUNT` | Must be exactly `bavafasobhan@gmail.com`; any other identity is rejected |
 | `DATA_DIR` | Writable runtime directory, default `/app/data` in Docker |
 
 The dashboard responds with **503 until its login is configured**; this is
@@ -60,6 +65,13 @@ reveals no account, credential or monitor state.
 Attach a Railway volume at `/app/data` (writable by UID 10001) if you need state
 and suspension markers to survive redeployments. Nothing in the repository's
 old root-level JSON files is automatically imported into the new application.
+
+Selecting the sole permitted identity does not delete accounts on the website or
+edit Railway Variables/volumes on your behalf. Remove obsolete secondary-account
+secrets in Railway's UI if any remain, and set `PRIMARY_ACCOUNT` to the value above.
+Do not paste passwords into chat or source. Historical suspension records are
+retained as safety evidence, not as an active account list; this identity
+restriction does not erase a suspension marker or allow a suspended account to run.
 
 ### Dashboard display
 

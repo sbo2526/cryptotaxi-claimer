@@ -8,6 +8,7 @@ from unittest.mock import patch
 import requests
 
 import dashboard
+import runtime_config
 
 
 class DashboardAccessTests(unittest.TestCase):
@@ -25,6 +26,9 @@ class DashboardAccessTests(unittest.TestCase):
         cls.thread.join()
 
     def setUp(self):
+        allowed = patch.object(runtime_config, 'ALLOWED_PRIMARY_ACCOUNT', 'main')
+        allowed.start()
+        self.addCleanup(allowed.stop)
         env = patch.dict(os.environ, {'DASHBOARD_USER': 'owner',
                                      'DASHBOARD_PASSWORD': 'test-dashboard-pass-123',
                                      'PRIMARY_ACCOUNT': 'main'}, clear=True)
