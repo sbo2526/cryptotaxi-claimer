@@ -175,6 +175,8 @@ def finite_number(value):
 
 
 STOP_MESSAGES = {
+    'request_failed': 'درخواست ورود یا خواندن اطلاعات با خطای شبکه، HTTP یا پاسخ نامعتبر روبه‌رو شد؛ تکرار خودکار انجام نشد. Runtime Logs سرویس را بررسی کنید.',
+    'state_invalid': 'ساختار اطلاعات دریافتی یا ذخیره‌سازی محلی معتبر نبود؛ برای جلوگیری از استارت بر اساس دادهٔ ناقص، برنامه متوقف شد.',
     'start_unknown': 'نتیجهٔ استارت یا تأیید آن نامشخص است؛ تلاش در دیتابیس محفوظ می‌ماند و خودکار تکرار نمی‌شود. وضعیت تاکسی و لاگ اجرا را برای رسیدگی دستی بررسی کنید.',
     'start_blocked': 'اجازه، سهمیه یا تازگی اطلاعات برای استارت تأیید نشد؛ پایش برای بررسی متوقف شده است.',
     'invalid_config': 'تنظیم اکانت، رمز یا اتصال دیتابیس ناقص یا نامعتبر است؛ Variables همین سرویس را بررسی کنید.',
@@ -355,6 +357,8 @@ def stop_code(view):
 
 
 SIMPLE_STOPS = {
+    'request_failed': ('دریافت پاسخ معتبر ناموفق بود', 'درخواست با خطای ارتباط یا پاسخ نامعتبر متوقف شد.', 'گزارش اجرای سرویس را بررسی کنید؛ رمز، توکن یا آدرس دیتابیس را در چت نفرستید.'),
+    'state_invalid': ('اطلاعات یا ذخیره‌سازی نیاز به بررسی دارد', 'ساختار داده یا ثبت محلی آن قابل تأیید نبود.', 'فضای ذخیره‌سازی و گزارش اجرای سرویس را بررسی کنید؛ استارت اجباری انجام ندهید.'),
     'already_running': ('یک اجرای دیگر شناسایی شد', 'هنگام شروع، اجرای دیگری قفل همین حساب را داشت.', 'اجرای اضافه را متوقف کنید؛ قفل دیتابیس را پاک نکنید.'),
     'database_error': ('ارتباط با دیتابیس برقرار نشد', 'این اجرا پیش از ورود به بازی متوقف شده است.', 'اتصال دیتابیس را در تنظیمات Railway بررسی کنید.'),
     'needs_login': ('ورود به بازی نیاز به بررسی دارد', 'سایت نشست ورود را نپذیرفته و برنامه متوقف شده است.', 'تنظیمات ورود و گزارش اجرای سرویس را بررسی کنید؛ رمز را در چت نفرستید.'),
@@ -444,7 +448,8 @@ def technical_section(view):
     account_label = 'تنظیم‌شده' if view['user'] else 'تنظیم نشده'
     identity = view['user'] or ALLOWED_PRIMARY_ACCOUNT
     received = fmt_jalali(view['received'].strftime('%Y-%m-%d %H:%M:%S')) if view['received'] else 'در دادهٔ محلی ثبت نشده'
-    body = f'''<dl class="technical-list"><div><dt>وضعیت دقیق</dt><dd>{esc(view['label'])}</dd></div>
+    code = stop_code(view) or 'توقفی ثبت نشده'
+    body = f'''<dl class="technical-list"><div><dt>کد توقف</dt><dd><bdi>{esc(code)}</bdi></dd></div><div><dt>وضعیت دقیق</dt><dd>{esc(view['label'])}</dd></div>
       <div><dt>گزارش برنامه</dt><dd>{esc(view['note'])}</dd></div>
       <div><dt>اکانت اصلی</dt><dd>{account_label} · <bdi>{esc(identity)}</bdi></dd></div>
       <div><dt>حالت تنظیم‌شده</dt><dd>{operation_mode()}</dd></div>
@@ -529,6 +534,8 @@ def car_card(car, view=None):
     start_label = 'استارت شده · سفر ثبت شده' if started else 'استارت نشده در آخرین دریافت'
     if not started and view and stop_code(view) == 'start_unknown':
         start_label = 'نتیجهٔ استارت نامشخص؛ بررسی دستی لازم است'
+    elif not started and view and stop_code(view) == 'manual_review':
+        start_label = 'وضعیت استارت تأیید نشده؛ بررسی دستی لازم است'
     if started:
         if timestamp_ms(ends_at):
             timer = remaining_trip_text(ends_at, view.get('now') if view else None)

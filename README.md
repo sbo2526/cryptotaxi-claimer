@@ -25,7 +25,15 @@
   `requests.Session` (including server cookies) for all reads. Session expiry does
   not trigger an automatic login. Sessions are not saved to disk: an explicitly
   started new worker needs a new login, subject to the shared request budget.
-- Requests remain paced at least 60 seconds apart. Subsequent state reads use
+- Requests remain paced at least 60 seconds apart. After a successful shared
+  database budget reservation, the local pacer's next slot is aligned to that
+  completed reservation (never moved earlier). This prevents database/IPC latency
+  from creating a small residual budget delay on every subsequent start or read.
+  A pre-send start-budget deferral follows the existing bounded cooldown path and
+  fetches fresh state before reconsidering a start; it is not a generic failure.
+  A deferred or failed verification **after** a start was sent instead stops with
+  `start_unknown` and retains the durable journal; no mutation is replayed.
+  Subsequent state reads use
   the nearest saved trip end plus 15 seconds, with a minimum 5-minute gap and a
   maximum 6-hour periodic check. With no active trips or an invalid/unknown timer,
   the fallback is 30 minutes (or an earlier known trip). Only numeric millisecond
@@ -140,6 +148,12 @@ timestamp are recorded; never driver messages, URLs, credentials or server bodie
 
 The dashboard distinguishes database setup/connection errors, an occupied lock,
 unavailable safety state, login/session stops and an unreported worker exit.
+Safe `request_failed` and `state_invalid` codes distinguish request/response failures
+from invalid state or local persistence failures, without storing raw exceptions.
+The technical panel exposes the fixed stop code. An older `manual_review` stop is
+not enough to prove no start was sent: the saved pre-start sample can still show
+no active trip. Check the game's current trip state and Runtime Logs before any
+manual intervention; never delete or reset the trip-start journal to bypass it.
 A startup-stage report older than three minutes is explicitly unconfirmed and
 requires inspection of **Runtime/Deploy Logs**, rather than showing an endless
 first-receive wait. The supervisor records an exit without restarting the monitor

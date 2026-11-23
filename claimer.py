@@ -202,6 +202,10 @@ class ReadOnlyMonitor:
             if self.stopped or is_suspended(self.user):
                 raise SafetyStop('Account monitoring is stopped')
             self.ownership.before_request()  # Budget survives process/service restarts.
+            # The DB reservation happens AFTER pacer.wait() starts its timer.
+            # Align the next local slot with the completed shared reservation;
+            # otherwise DB/IPC latency can cause a tiny residual on every cycle.
+            self.pacer.cooldown(60.0)
             if endpoint == 'trips/start':
                 intent = self._start_intent
                 if (not intent or not isinstance(payload, dict) or not valid_car_id(payload.get('carId'))
@@ -242,11 +246,11 @@ class ReadOnlyMonitor:
             if result.status_code == 403:
                 raise SafetyStop('Access denied; manual review required (not classified as a ban)', 'access_denied')
             if 300 <= result.status_code < 400:
-                raise SafetyStop('Unexpected redirect; manual review required')
+                raise SafetyStop('Unexpected redirect; manual review required', 'request_failed')
             result.raise_for_status()
             data = result.json()
             if not isinstance(data, dict) or data.get('error'):
-                raise SafetyStop('Unexpected API error; manual review required')
+                raise SafetyStop('Unexpected API error; manual review required', 'request_failed')
             if mutation_started:
                 trip = data.get('trip')
                 now_ms = time.time() * 1000
@@ -270,7 +274,7 @@ class ReadOnlyMonitor:
         except Exception:
             self.stop()
             # No driver/HTTP exception bodies, URLs with tokens or credentials in logs.
-            code = 'start_unknown' if mutation_started else 'manual_review'
+            code = 'start_unknown' if mutation_started else 'request_failed'
             raise SafetyStop('Monitoring failed; no automatic retry, manual review required', code) from None
 
     def login(self):
@@ -347,19 +351,31 @@ class ReadOnlyMonitor:
                     # myCars precede rentedCars; at most ONE start per cycle.
                     car_id = ready[0]['id']
                     self.start_trip(car_id)
-                    plan = self.poll(allow_start=False)  # Same session, paced state verification.
+                    try:
+                        plan = self.poll(allow_start=False)  # Same session, paced state verification.
+                    except RetryLater:
+                        raise SafetyStop('Start sent but observation deferred; never replay automatically', 'start_unknown') from None
+                    except SafetyStop as error:
+                        if error.code in ('suspended', 'needs_login', 'access_denied', 'start_unknown'):
+                            raise
+                        raise SafetyStop('Start sent but observation failed; never replay automatically', 'start_unknown') from None
                     if str(car_id) not in self._observed_starts:
                         raise SafetyStop('Started trip not observed in fresh state', 'start_unknown')
                     return plan
                 if ready and delay > MIN_POLL_SECONDS:
                     delay, reason = MIN_POLL_SECONDS, 'ready_trip'
             return delay, reason
+        except RetryLater:
+            # A start was NOT sent (post-send deferrals are converted above).
+            # Run's bounded cooldown handler must receive this control signal.
+            # It will fetch fresh state before considering any future start.
+            raise
         except SafetyStop:
             self.stop()
             raise
         except Exception:
             self.stop()
-            raise SafetyStop('Invalid state or persistence failure; manual review required') from None
+            raise SafetyStop('Invalid state or persistence failure; manual review required', 'state_invalid') from None
 
     def publish_activity(self, status, seconds=None, reason=None, code=None):
         """Primary-scoped local evidence, not a heartbeat or a running guarantee."""

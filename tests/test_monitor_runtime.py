@@ -51,6 +51,16 @@ class RuntimeReportTests(unittest.TestCase):
         self.assertNotIn('private-driver-text', self.path.read_text())
         self.assertEqual(monitor_runtime.read_report()['code'], 'manual_review')
 
+    def test_safe_request_and_state_failure_codes_survive_runtime_and_presentation(self):
+        for code in ('request_failed', 'state_invalid'):
+            with self.subTest(code=code):
+                monitor_runtime.write_report('stopped', code=code)
+                self.assertEqual(monitor_runtime.read_report()['code'], code)
+                view = dashboard.dashboard_view({})
+                self.assertEqual(dashboard.stop_code(view), code)
+                self.assertIn(code, dashboard.technical_section(view))
+                self.assertIn(dashboard.STOP_MESSAGES[code], view['note'])
+
     def test_missing_corrupt_foreign_future_or_invalid_reports_are_ignored(self):
         self.assertIsNone(monitor_runtime.read_report())
         self.path.write_text('{bad')
