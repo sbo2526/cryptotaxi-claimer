@@ -61,7 +61,13 @@ The dashboard uses the same filtered active list for cards, its total, the creat
 panel count, and `/count`. Deleted/status-only accounts are not reintroduced by
 stale status data. The page detects count changes every 10 seconds.
 
-This does not delete accounts on the external website. Ban detection rules are
-unchanged: HTTP 403 can still be classified as a ban, so recorded bans are not
-proof of a confirmed account-level suspension. Existing recorded bans will also
-be cleaned up after deployment.
+This does not delete accounts on the external website. Automatic deletion requires
+an explicit account suspension/ban message or an account-specific error code in
+the actual login/API response, including error JSON returned with HTTP 200. The
+message and reason (for example, Multi Account) are retained in the audit archive.
+Generic 401/403, Forbidden, access denied, proxy/network errors, and repeated
+failures alone never authorize deletion.
+
+Legacy archive/status entries based only on 403 or failure counts are retained as
+unconfirmed history but no longer remove or hide an existing active account.
+Previously deleted credentials are not reconstructed or restored automatically.

@@ -36,6 +36,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from ban_detection import is_ban_error, is_confirmed_ban_record, suspension_reason
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -322,14 +324,6 @@ MAX_RENTED_PER_ACCOUNT = 2   # maximum rented cars per account — never exceed 
 
 # ---- BAN detection + auto-remove config ----
 BAN_DETECTION_ENABLED = True      # master toggle
-BAN_CONSECUTIVE_FAILURES = 5      # consecutive sweep failures before BAN
-BAN_403_AUTO_REMOVE = True        # auto-remove on HTTP 403
-BAN_LOGIN_FAILURE_THRESHOLD = 3   # consecutive login failures before BAN
-BAN_ERROR_KEYWORDS = [            # server error keywords that indicate BAN
-    "banned", "bloqueado", "bloqueada", "suspended", "suspendido",
-    "blocked", "blocked_user", "cuenta bloqueada", "account blocked",
-    "acceso denegado", "forbidden", "no autorizado",
-]
 BANNED_ACCOUNTS_FILE = os.path.join(HERE, "banned_accounts.json")
 
 
@@ -379,6 +373,11 @@ def banned_usernames(data):
             if isinstance(entry, dict) and isinstance(entry.get("username"), str)}
 
 
+def confirmed_banned_usernames(data):
+    return banned_usernames({"banned": [entry for entry in data.get("banned", [])
+                                      if is_confirmed_ban_record(entry)]})
+
+
 def purge_banned_accounts(status=None):
     """Delete banned credentials/live state, keeping only the ban audit record.
 
@@ -387,17 +386,19 @@ def purge_banned_accounts(status=None):
     """
     with account_files_lock:
         archive = load_banned_accounts()
-        banned = banned_usernames(archive)
+        banned = confirmed_banned_usernames(archive)
         disk_status = load_status()
         for snapshot in (disk_status, status or {}):
             for user, entry in snapshot.items():
                 if user == "_meta" or not isinstance(entry, dict):
                     continue
-                if entry.get("banned") is True or entry.get("last_result") == "BAN":
+                if ((entry.get("banned") is True or entry.get("last_result") == "BAN")
+                        and is_ban_error(error_text=entry.get("ban_reason"))):
                     if user not in banned:
                         archive["banned"].append({
                             "username": user,
                             "reason": entry.get("ban_reason") or "",
+                            "confirmed": True,
                             "detected_at": entry.get("banned_at") or "",
                         })
                         banned.add(user)
@@ -520,35 +521,30 @@ def get_email_status_summary():
     }
 
 
-def is_ban_error(status_code=None, error_text=None):
-    """
-    Detect whether an HTTP response or error message indicates a BAN.
+class AccountSuspendedError(RuntimeError):
+    """The server explicitly reported an account-level suspension."""
 
-    Returns True if the response is a BAN signal.
-    """
-    if status_code is not None:
-        # 403 = Forbidden — definitive BAN signal
-        if status_code == 403:
-            return True
-        # 401 persistent = credentials blocked (checked separately by caller)
 
-    if error_text:
-        text_lower = error_text.lower()
-        for keyword in BAN_ERROR_KEYWORDS:
-            if keyword in text_lower:
-                return True
-    return False
+def check_account_suspension(response, user):
+    reason = suspension_reason(response)
+    if reason:
+        if BAN_DETECTION_ENABLED:
+            mark_banned(user, reason)
+        raise AccountSuspendedError(reason)
 
 
 def mark_banned(user, reason, consecutive_failures=0):
-    """Archive a detected ban, then remove credentials, session and live state."""
+    """Archive explicit suspension evidence, then remove active credentials/state."""
+    if not is_ban_error(error_text=reason):
+        log.warning("[%s] no explicit suspension evidence — account retained", user)
+        return
     timestamp = datetime.fromtimestamp(time.time(), tz=TZ).strftime("%Y-%m-%d %H:%M:%S")
     log.warning("[%s] 🚫 BAN DETECTED — removing account: %s", user, reason)
     with account_files_lock:
         archive = load_banned_accounts()
-        if user not in banned_usernames(archive):
+        if user not in confirmed_banned_usernames(archive):
             archive["banned"].append({
-                "username": user, "reason": reason,
+                "username": user, "reason": reason, "confirmed": True,
                 "consecutive_failures": consecutive_failures,
                 "detected_at": timestamp,
             })
@@ -592,7 +588,7 @@ def load_status():
 def save_status(status):
     with account_files_lock:
         # A worker may still hold a snapshot from before another worker banned an account.
-        banned = banned_usernames(load_banned_accounts())
+        banned = confirmed_banned_usernames(load_banned_accounts())
         for user in banned:
             status.pop(user, None)
         atomic_save_json(STATUS_FILE, status)
@@ -765,17 +761,11 @@ def login(session, user):
     try:
         r = session.post(f"{BASE}/auth/login", headers=HEADERS,
                          json={"username": user, "password": acc["password"]}, timeout=30)
+        check_account_suspension(r, user)
         r.raise_for_status()
         data = r.json()
         if data.get("error"):
             error_msg = str(data.get("error", {}))
-            # Check for BAN keywords in login error
-            if is_ban_error(error_text=error_msg):
-                LOGIN_FAILURE_COUNTS[user] = LOGIN_FAILURE_COUNTS.get(user, 0) + 1
-                if BAN_DETECTION_ENABLED and LOGIN_FAILURE_COUNTS[user] >= BAN_LOGIN_FAILURE_THRESHOLD:
-                    mark_banned(user, f"login rejected: {error_msg}",
-                                consecutive_failures=LOGIN_FAILURE_COUNTS[user])
-                raise RuntimeError(f"login error: {error_msg}")
             # Non-BAN login error — track but don't ban
             LOGIN_FAILURE_COUNTS[user] = LOGIN_FAILURE_COUNTS.get(user, 0) + 1
             raise RuntimeError(f"login error: {error_msg}")
@@ -783,12 +773,10 @@ def login(session, user):
         LOGIN_FAILURE_COUNTS[user] = 0
         log.info("[%s] logged in OK", user)
         return session
-    except requests.exceptions.HTTPError as e:
-        # 403 = BAN
-        if e.response is not None and e.response.status_code == 403:
-            if BAN_DETECTION_ENABLED and BAN_403_AUTO_REMOVE:
-                mark_banned(user, f"HTTP 403 Forbidden on login",
-                            consecutive_failures=BAN_LOGIN_FAILURE_THRESHOLD)
+    except requests.exceptions.HTTPError:
+        # Access denial can be temporary, IP-level or an expired session.
+        # Only check_account_suspension may classify the response as a ban.
+        LOGIN_FAILURE_COUNTS[user] = LOGIN_FAILURE_COUNTS.get(user, 0) + 1
         raise
     except requests.exceptions.ConnectionError as e:
         _report_proxy_error(session, user, e)
@@ -800,10 +788,12 @@ def api_post(session, endpoint, payload, user):
     On proxy connection error: report proxy dead, recreate session direct, retry once."""
     try:
         r = session.post(f"{BASE}/{endpoint}", headers=HEADERS, json=payload, timeout=30)
+        check_account_suspension(r, user)
         if r.status_code == 401:
             log.warning("[%s] session expired (401) on %s -> re-logging in and retrying", user, endpoint)
             session = login(session, user)
             r = session.post(f"{BASE}/{endpoint}", headers=HEADERS, json=payload, timeout=30)
+            check_account_suspension(r, user)
         return r
     except requests.exceptions.ConnectionError as e:
         # Proxy might be dead — report it and retry with a fresh direct session
@@ -816,7 +806,9 @@ def api_post(session, endpoint, payload, user):
         session = make_session(proxy=None)  # direct, no proxy
         SESSIONS[user] = session
         session = login(session, user)
-        return session.post(f"{BASE}/{endpoint}", headers=HEADERS, json=payload, timeout=30)
+        r = session.post(f"{BASE}/{endpoint}", headers=HEADERS, json=payload, timeout=30)
+        check_account_suspension(r, user)
+        return r
 
 
 def get_state(session, user):
@@ -1403,24 +1395,9 @@ def process_account(acc, status):
     else:
         CONSECUTIVE_FAILURES[user] = CONSECUTIVE_FAILURES.get(user, 0) + 1
         failures = CONSECUTIVE_FAILURES[user]
-        log.warning("[%s] consecutive sweep failures: %d/%d",
-                    user, failures, BAN_CONSECUTIVE_FAILURES)
-
-        if BAN_DETECTION_ENABLED and failures >= BAN_CONSECUTIVE_FAILURES:
-            # Also check if the error text contains BAN keywords
-            ban_keyword_match = any(
-                kw in msg.lower() for kw in BAN_ERROR_KEYWORDS
-            )
-            if ban_keyword_match:
-                mark_banned(user, f"sweep error contains BAN keyword: {msg}",
-                            consecutive_failures=failures)
-            else:
-                mark_banned(user, f"{failures} consecutive sweep failures",
-                            consecutive_failures=failures)
-        # Check for 403 in the error message
-        elif "403" in msg and BAN_DETECTION_ENABLED and BAN_403_AUTO_REMOVE:
-            mark_banned(user, f"HTTP 403 detected in sweep: {msg}",
-                        consecutive_failures=failures)
+        log.warning("[%s] consecutive sweep failures: %d (not proof of a ban)", user, failures)
+        # Failure counts and exception text never authorize deletion. The actual
+        # response is checked at login/api_post, including HTTP 200 error JSON.
 
 
 # --------------------------------------------------------------------------- #
