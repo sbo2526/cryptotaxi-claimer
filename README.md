@@ -87,9 +87,9 @@ restriction does not erase a suspension marker or allow a suspended account to r
 
 The dashboard uses a default dark palette (including cards, tables, disclosures,
 status messages and native browser controls), without JavaScript/theme storage or
-external assets. Persian text prefers the **locally installed B Nazanin** regular
+external assets. Persian text prefers the **locally installed IRANSans** regular
 and bold faces through an Arabic-only `@font-face` definition; Latin identifiers
-keep their existing fonts. Labels use larger sizes for readability. **No B Nazanin
+keep their existing fonts. Labels use larger sizes for readability. **No IRANSans
 font binary is included**: devices without it fall back to Tahoma/Arial. To ensure
 the exact face on every phone, a font file licensed for web embedding must first
 be supplied and integrated; naming a font in CSS alone cannot install it remotely.
