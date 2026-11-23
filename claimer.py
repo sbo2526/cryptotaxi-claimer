@@ -29,6 +29,7 @@ import time
 import random
 import logging
 import threading
+import tempfile
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -98,6 +99,7 @@ try:
 except Exception:
     pass
 
+account_files_lock = threading.RLock()
 stats_lock = threading.Lock()
 sessions_lock = threading.Lock()
 SESSIONS = {}   # username -> requests.Session
@@ -341,22 +343,84 @@ def today_str():
 # --------------------------------------------------------------------------- #
 # BAN Detection + Auto-Remove
 # --------------------------------------------------------------------------- #
-def load_banned_accounts():
-    """Load the banned accounts list from disk."""
+def atomic_save_json(path, data):
+    """Replace JSON atomically so dashboard readers never see a partial write."""
+    fd, temporary = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
     try:
-        with open(BANNED_ACCOUNTS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def load_banned_accounts():
+    """Load archive, supporting the legacy empty-list format."""
+    try:
+        with open(BANNED_ACCOUNTS_FILE, "r", encoding="utf-8") as stream:
+            data = json.load(stream)
+    except FileNotFoundError:
         return {"banned": []}
+    if isinstance(data, list):
+        data = {"banned": data}
+    if not isinstance(data, dict) or not isinstance(data.get("banned"), list):
+        raise ValueError("Invalid banned accounts archive")
+    return data
 
 
 def save_banned_accounts(data):
-    """Persist banned accounts list to disk."""
-    try:
-        with open(BANNED_ACCOUNTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        log.warning("Failed to save banned_accounts.json: %s", e)
+    with account_files_lock:
+        atomic_save_json(BANNED_ACCOUNTS_FILE, data)
+
+
+def banned_usernames(data):
+    return {entry["username"] for entry in data.get("banned", [])
+            if isinstance(entry, dict) and isinstance(entry.get("username"), str)}
+
+
+def purge_banned_accounts(status=None):
+    """Delete banned credentials/live state, keeping only the ban audit record.
+
+    Also reconciles old bans on startup/every sweep. Serialize read-modify-write
+    operations because several account workers can detect bans simultaneously.
+    """
+    with account_files_lock:
+        archive = load_banned_accounts()
+        banned = banned_usernames(archive)
+        disk_status = load_status()
+        for snapshot in (disk_status, status or {}):
+            for user, entry in snapshot.items():
+                if user == "_meta" or not isinstance(entry, dict):
+                    continue
+                if entry.get("banned") is True or entry.get("last_result") == "BAN":
+                    if user not in banned:
+                        archive["banned"].append({
+                            "username": user,
+                            "reason": entry.get("ban_reason") or "",
+                            "detected_at": entry.get("banned_at") or "",
+                        })
+                        banned.add(user)
+        # Persist history before removing credentials or live status.
+        if banned:
+            save_banned_accounts(archive)
+        accounts = load_accounts()
+        remaining = [account for account in accounts if account["username"] not in banned]
+        if len(remaining) != len(accounts):
+            save_accounts(remaining)
+        for user in banned:
+            disk_status.pop(user, None)
+            if status is not None:
+                status.pop(user, None)
+        if banned:
+            save_status(disk_status)
+        with sessions_lock:
+            for user in banned:
+                ACCOUNTS.pop(user, None)
+                SESSIONS.pop(user, None)
+                CONSECUTIVE_FAILURES.pop(user, None)
+                LOGIN_FAILURE_COUNTS.pop(user, None)
+        return remaining
 
 
 # --------------------------------------------------------------------------- #
@@ -477,59 +541,19 @@ def is_ban_error(status_code=None, error_text=None):
 
 
 def mark_banned(user, reason, consecutive_failures=0):
-    """
-    Mark an account as banned:
-    1. Remove from accounts.json
-    2. Add to banned_accounts.json with reason and timestamp
-    3. Clean up the session
-    4. Log clearly
-    """
+    """Archive a detected ban, then remove credentials, session and live state."""
     timestamp = datetime.fromtimestamp(time.time(), tz=TZ).strftime("%Y-%m-%d %H:%M:%S")
     log.warning("[%s] 🚫 BAN DETECTED — removing account: %s", user, reason)
-
-    # Remove from accounts.json
-    try:
-        accounts = load_accounts()
-        original_count = len(accounts)
-        accounts = [a for a in accounts if a.get("username") != user]
-        if len(accounts) < original_count:
-            save_accounts(accounts)
-            log.info("[%s] removed from accounts.json (now %d accounts)", user, len(accounts))
-    except Exception as e:
-        log.error("[%s] failed to remove from accounts.json: %s", user, e)
-
-    # Add to banned_accounts.json
-    try:
-        banned = load_banned_accounts()
-        banned["banned"].append({
-            "username": user,
-            "reason": reason,
-            "consecutive_failures": consecutive_failures,
-            "detected_at": timestamp,
-        })
-        save_banned_accounts(banned)
-        log.info("[%s] added to banned_accounts.json (total banned: %d)",
-                 user, len(banned["banned"]))
-    except Exception as e:
-        log.error("[%s] failed to save banned_accounts.json: %s", user, e)
-
-    # Clean up session
-    with sessions_lock:
-        if user in SESSIONS:
-            del SESSIONS[user]
-            log.info("[%s] session cleared", user)
-
-    # Update status.json to mark BAN
-    try:
-        status = load_status()
-        if user in status:
-            status[user]["last_result"] = "BAN"
-            status[user]["banned"] = True
-            status[user]["banned_at"] = timestamp
-            status[user]["ban_reason"] = reason
-            save_status(status)
-    except Exception:
-        pass
+    with account_files_lock:
+        archive = load_banned_accounts()
+        if user not in banned_usernames(archive):
+            archive["banned"].append({
+                "username": user, "reason": reason,
+                "consecutive_failures": consecutive_failures,
+                "detected_at": timestamp,
+            })
+            save_banned_accounts(archive)
+        purge_banned_accounts()
 
 
 # Track consecutive failures per account (in-memory + status.json)
@@ -540,14 +564,19 @@ LOGIN_FAILURE_COUNTS = {}  # username -> int
 def load_accounts():
     with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-    if not isinstance(data, list) or not data:
-        raise ValueError("accounts.json must be a non-empty JSON list of {username, password} objects")
+    if not isinstance(data, list):
+        raise ValueError("accounts.json must be a JSON list of {username, password} objects")
     out = []
     for acc in data:
         if not acc.get("username") or not acc.get("password"):
             raise ValueError(f"account missing username/password: {acc}")
         out.append(acc)
     return out
+
+
+def save_accounts(accounts):
+    with account_files_lock:
+        atomic_save_json(ACCOUNTS_FILE, accounts)
 
 
 def load_status():
@@ -561,8 +590,12 @@ def load_status():
 
 
 def save_status(status):
-    with open(STATUS_FILE, "w", encoding="utf-8") as f:
-        json.dump(status, f, ensure_ascii=False, indent=2)
+    with account_files_lock:
+        # A worker may still hold a snapshot from before another worker banned an account.
+        banned = banned_usernames(load_banned_accounts())
+        for user in banned:
+            status.pop(user, None)
+        atomic_save_json(STATUS_FILE, status)
 
 
 # --------------------------------------------------------------------------- #
@@ -1394,19 +1427,7 @@ def process_account(acc, status):
 # sweeps
 # --------------------------------------------------------------------------- #
 def run_sweep(workers):
-    accounts = load_accounts()
-
-    # Load banned accounts list and skip them
-    banned_list = set()
-    if BAN_DETECTION_ENABLED:
-        banned_data = load_banned_accounts()
-        banned_list = {b["username"] for b in banned_data.get("banned", [])}
-        if banned_list:
-            # Also remove any banned accounts that somehow remain in accounts.json
-            accounts = [a for a in accounts if a["username"] not in banned_list]
-            if len(accounts) < len(load_accounts()):
-                log.info("sweep: %d banned account(s) skipped/removed from processing",
-                         len(load_accounts()) - len(accounts))
+    accounts = purge_banned_accounts()
 
     with sessions_lock:
         ACCOUNTS.clear()
@@ -1416,6 +1437,7 @@ def run_sweep(workers):
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(lambda acc: process_account(acc, status), accounts))
     with stats_lock:
+        purge_banned_accounts(status)
         # Add proxy stats to meta for dashboard display
         if PROXY_MANAGER:
             status.setdefault("_meta", {})["proxy"] = PROXY_MANAGER.get_stats()

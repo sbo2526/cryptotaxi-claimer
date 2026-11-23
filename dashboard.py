@@ -594,8 +594,7 @@ def creator_status_info():
     """Read creator_status.json (live, written every second by account_creator.py)
     and fall back to creator.log parsing if the status file is unavailable."""
     target = 100
-    accounts = load_json(ACCOUNTS_FILE, [])
-    current = len(accounts) if isinstance(accounts, list) else 0
+    current = len(active_accounts_info())
     remaining = max(0, target - current)
     pct = (current / target * 100) if target > 0 else 0
 
@@ -1141,6 +1140,25 @@ def banned_accounts_info():
     return sorted(by_user.values(), key=lambda row: (row["detected_at"], row["username"]), reverse=True)
 
 
+def active_accounts_info():
+    """The active list is accounts.json, never resurrect old status-only users."""
+    accounts = load_json(ACCOUNTS_FILE, [])
+    if not isinstance(accounts, list):
+        return []
+    banned = {entry["username"] for entry in banned_accounts_info()}
+    active = []
+    seen = set()
+    for account in accounts:
+        if not isinstance(account, dict):
+            continue
+        user = account.get("username")
+        if not isinstance(user, str) or not user or user in banned or user in seen:
+            continue
+        active.append(account)
+        seen.add(user)
+    return active
+
+
 def banned_accounts_section():
     """Show recorded bans without changing accounts or triggering requests."""
     records = banned_accounts_info()
@@ -1192,19 +1210,14 @@ def banned_accounts_section():
 
 def render():
     status = load_json(STATUS_FILE, {})
-    accounts = load_json(ACCOUNTS_FILE, [])
+    accounts = active_accounts_info()
     earnings = load_json(EARNINGS_FILE, {})
     creator_info = creator_status_info()
     log_errors_map = recent_errors_from_log()
     meta_date = status.get("_meta", {}).get("date", time.strftime("%Y-%m-%d"))
     now = datetime.now(tz=TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-    seen = {a.get("username") for a in accounts}
-    ordered = list(accounts)
-    for u in status:
-        if u != "_meta" and u not in seen:
-            ordered.append({"username": u})
-        seen.add(u)
+    ordered = accounts
 
     total_trips_today = 0
     total_checks_today = 0
@@ -1780,10 +1793,8 @@ def render():
   updateCountdowns();
   setInterval(updateCountdowns, 1000);
 
-  // Auto-refresh when a new account is added.
-  // Poll /count every 10s; if the count differs from the current page's
-  // account count, reload immediately so the new account appears and its
-  // claiming starts visible in the dashboard.
+  // Refresh within 10 seconds when accounts are added or removed/banned.
+  // Use the same filtered active list as the cards and summary count.
   (function () {{
     var currentCount = document.querySelectorAll('.acc').length;
     function checkCount() {{
@@ -2035,12 +2046,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Lightweight account-count endpoint for JS auto-refresh detection.
-        # The dashboard JS polls this every 10s; if the count changes (a new
-        # account was added by the account creator), it reloads the page.
+        # The dashboard JS polls this every 10s; additions and ban/removal
+        # changes reload the cards and every displayed account count.
         if parsed.path == "/count":
             try:
-                accounts = load_json(ACCOUNTS_FILE, [])
-                count = len(accounts) if isinstance(accounts, list) else 0
+                count = len(active_accounts_info())
                 self.send_json({"ok": True, "count": count})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, status=500)

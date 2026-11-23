@@ -22,7 +22,7 @@ class AccountCreationDisabledTests(unittest.TestCase):
     def test_stale_status_does_not_show_creator_as_active(self):
         def load(path, default):
             if path == dashboard.ACCOUNTS_FILE:
-                return [{}, {}]
+                return [{"username": "first"}, {"username": "second"}]
             return {'status': 'running', 'next_cycle_at': 9999999999}
 
         with patch.object(dashboard, 'load_json', side_effect=load):
