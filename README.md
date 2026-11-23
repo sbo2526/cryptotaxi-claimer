@@ -6,7 +6,7 @@ Automated multi-account claimer for [thecryptotaxi.com](https://thecryptotaxi.co
 
 | Service | Description |
 |---|---|
-| **Claimer** | Periodically sweeps all accounts — starts trips, claims missions, claims referral trips, and runs the FREE ad visitor |
+| **Claimer** | Periodically sweeps all accounts — starts trips, claims missions, and claims referral trips |
 | **Account Creator** | Disabled — automatic account creation is turned off |
 | **Dashboard** | Web dashboard on port 8080 with live stats, countdown timers, and per-account tables |
 | **Referral Faker** | Disabled — automatic referral account creation is turned off |
@@ -26,7 +26,7 @@ docker run -d -p 8080:8080 cryptotaxi
 ## Files
 
 - `supervisor.py` — process manager / watchdog
-- `claimer.py` — main claimer with FREE worker
+- `claimer.py` — main claimer
 - `account_creator.py` — background account creator
 - `dashboard.py` — web dashboard (port 8080)
 - `referral_faker.py` — referral faker (dormant by default)
@@ -43,3 +43,7 @@ even if old status files exist. Existing accounts and the claimer are unchanged.
 
 This takes effect on Railway only after the change is merged into `main` and
 successfully deployed. Editing this working branch does not stop existing production workers.
+
+The FREE ad visitor feature has been removed from both the dashboard and the
+claimer. No background worker visits or claims ad links. Historical runtime data
+is left intact; it does not re-enable this feature.
