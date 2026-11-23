@@ -47,3 +47,21 @@ successfully deployed. Editing this working branch does not stop existing produc
 The FREE ad visitor feature has been removed from both the dashboard and the
 claimer. No background worker visits or claims ad links. Historical runtime data
 is left intact; it does not re-enable this feature.
+
+## Banned account cleanup
+
+Recorded bans are reconciled at the beginning and end of every sweep. Banned
+accounts are removed from `accounts.json` (including stored credentials), live
+`status.json`, and in-memory account/session caches. The ban archive retains only
+its existing audit records; it is not a list of active accounts. Newly detected
+bans are archived before deletion. Concurrent detections use serialized, atomic
+JSON writes, and an empty active account list is supported.
+
+The dashboard uses the same filtered active list for cards, its total, the creator
+panel count, and `/count`. Deleted/status-only accounts are not reintroduced by
+stale status data. The page detects count changes every 10 seconds.
+
+This does not delete accounts on the external website. Ban detection rules are
+unchanged: HTTP 403 can still be classified as a ban, so recorded bans are not
+proof of a confirmed account-level suspension. Existing recorded bans will also
+be cleaned up after deployment.
