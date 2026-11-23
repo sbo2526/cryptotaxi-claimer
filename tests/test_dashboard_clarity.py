@@ -167,6 +167,8 @@ class DashboardClarityTests(unittest.TestCase):
         html = dashboard.account_data_section(view)
         self.assertIn('تاکسی اصلی، سپس تاکسی‌های رنتی', html)
         self.assertIn('حداکثر یک استارت', html)
+        self.assertIn('هم‌زمان با سفر اصلی', html)
+        self.assertIn('منتظر پایان آن نمی‌مانند', html)
 
     @unittest.skipUnless(shutil.which('node'), 'Node required for browser logic test')
     def test_filter_persistence_empty_results_invalid_values_and_blocked_storage(self):
