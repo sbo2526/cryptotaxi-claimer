@@ -127,8 +127,8 @@ class MonitorSafetyTests(unittest.TestCase):
         with patch.object(dashboard, 'banned_accounts_info', return_value=[]):
             panel = dashboard.account_data_section(dashboard.dashboard_view(state))
         self.assertIn('quota-count">10 از 10</span>', panel)
-        self.assertIn('car-bonus-count">4</span>', panel)
-        self.assertIn('car-bonus-count">0</span>', panel)
+        self.assertIn('car-bonus-count">4</strong>', panel)
+        self.assertIn('car-bonus-count">0</strong>', panel)
         self.assertIn('account-bonus-count">50</strong>', panel)
         self.assertNotIn('>54<', panel)
         self.assertNotIn('>60<', panel)

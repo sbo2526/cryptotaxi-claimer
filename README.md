@@ -77,10 +77,22 @@ restriction does not erase a suspension marker or allow a suspended account to r
 
 ### Dashboard display
 
-The top row separates monitoring configuration, the selected primary identity,
-and the **last successful saved receive** (Tehran time). Refreshing the page does
-not change that timestamp. Enabling the opt-in flag alone is not proof that a
-monitor process is running; samples older than ten minutes are labeled stale.
+The Persian RTL overview starts with a plain-language status and suggested next
+step. Three summary cards separate configured automatic starts, the **last
+successful saved receive** (Tehran time), and the planned next check. The primary
+identity stays in the header. Refreshing the page does not change the receive
+timestamp. Enabling the opt-in flag alone is not proof that a monitor process is
+running; recorded stops take precedence over a fresh sample, and samples older
+than ten minutes are labeled stale.
+
+Wallet, fleet count, recorded trips and reported readiness precede individual taxi
+cards, with personal taxis first. All/personal/rented filters run only in the
+browser and retain their selection across refreshes when storage is available.
+Each card keeps quota details and the original site block message in a disclosure;
+the known Spanish not-your-turn message also has a Persian summary. Technical
+status and configuration guidance live in a separate collapsed panel, opened by
+the help links. No dashboard button starts a trip or changes service settings.
+The layout adapts to phones without external fonts, images or script dependencies.
 
 Without a valid primary snapshot, the dashboard shows an explicit Persian empty
 state instead of zero balance/trip cards. Wallet and car information appear only
