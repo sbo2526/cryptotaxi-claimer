@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Protected local-file dashboard: configuration, real data freshness and history.
+"""Local-file dashboard with optional private authentication: configuration, real data freshness and history.
 
 Rendering and browser refreshes read local files only; they never enable or call
 external monitoring. Missing/invalid account data is not presented as zero.
@@ -22,7 +22,7 @@ from rental_rules import rental_preview
 from monitor_runtime import read_report
 from ban_detection import is_ban_error, is_confirmed_ban_record
 from runtime_config import (DATA_DIR, primary_username, monitoring_enabled, initialize_data,
-                            ALLOWED_PRIMARY_ACCOUNT, auto_start_enabled)
+                            ALLOWED_PRIMARY_ACCOUNT, auto_start_enabled, dashboard_public)
 
 TZ = ZoneInfo('Asia/Tehran')
 PORT = int(os.environ.get('PORT', '8080'))
@@ -704,6 +704,8 @@ def events_section():
 
 
 PAGE_CSS = '''
+.access-notice{padding:12px 16px;margin:0 0 18px;font-size:14px;line-height:1.9;border:1px solid var(--warning-line);border-radius:10px;color:var(--amber);background:var(--warning-bg)}
+
 /* IRANSans is used when installed; no font binary or external CDN is bundled.
    Arabic glyph ranges keep Latin identifiers and code in their familiar fonts. */
 @font-face{font-family:"Dashboard Persian";src:local("IRANSans"),local("IRANSansWeb"),local("IRANSans-Regular"),local("IRANSans Regular");font-style:normal;font-weight:400;font-display:swap;unicode-range:U+0600-06FF,U+0750-077F,U+08A0-08FF,U+200C-200F,U+FB50-FDFF,U+FE70-FEFF}
@@ -1077,8 +1079,9 @@ PAGE_JS = '''
 def render():
     view = dashboard_view()
     identity = esc(view['user'] or 'حساب اصلی تنظیم نشده')
+    access_note = ('<p class="access-notice" role="note">نمایش عمومی · ورود بدون رمز فعال است؛ هرکسی آدرس سایت را داشته باشد می‌تواند اطلاعات این صفحه را ببیند. این صفحه فقط نمایشگر است.</p>' if dashboard_public() else '')
     return f'''<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b111c"><meta name="color-scheme" content="dark"><meta http-equiv="refresh" content="30">
+      <meta name="robots" content="noindex, nofollow"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0b111c"><meta name="color-scheme" content="dark"><meta http-equiv="refresh" content="30">
       <title>Crypto Taxi — تاکسی‌های من</title><style>{PAGE_CSS}</style></head><body>
       <a class="skip-link" href="#mainContent">رفتن به محتوای اصلی</a><div class="app-shell">
       <aside class="sidebar" aria-label="منوی اصلی"><a class="brand" href="#overview" aria-label="کریپتو تاکسی، نمای کلی">
@@ -1096,13 +1099,20 @@ def render():
         <div class="header-actions"><div class="identity"><span class="avatar">{icon('lock')}</span>
           <div><strong>حساب اصلی شما</strong><bdi>{identity}</bdi></div></div>
           <a class="button" href="/">{icon('refresh')} بازخوانی صفحه</a></div></header>
-        {status_section(view)}{account_data_section(view)}{rentals_section(view)}
+        {access_note}{status_section(view)}{account_data_section(view)}{rentals_section(view)}
         <section id="history" class="history" aria-label="سوابق و راهنما"><div class="history-heading">{icon('history')}<h2>سوابق و راهنما</h2><p>جزئیات بیشتر، فقط وقتی به آن‌ها نیاز دارید.</p></div>
           {technical_section(view)}{banned_accounts_section()}{events_section()}</section>
         <footer class="page-footer"><span>{icon('refresh')} بازخوانی صفحه هر ۳۰ ثانیه · بدون درخواست مستقیم به بازی</span><span>زمان‌ها به وقت تهران · کلیم و رنت غیرفعال</span></footer>
       </main></div><script>{PAGE_JS}</script></body></html>'''
 
 class Handler(BaseHTTPRequestHandler):
+    def end_headers(self):
+        # Discourage indexing and leaking the dashboard URL via external links.
+        # These headers are not authentication or a privacy guarantee.
+        self.send_header('X-Robots-Tag', 'noindex, nofollow')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        super().end_headers()
+
     def send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
@@ -1113,6 +1123,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def authorized(self):
+        if dashboard_public():
+            return True
         user = os.environ.get('DASHBOARD_USER', '')
         password = os.environ.get('DASHBOARD_PASSWORD', '')
         if not user or len(password) < 16:

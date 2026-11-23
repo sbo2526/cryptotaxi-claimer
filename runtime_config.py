@@ -1,4 +1,4 @@
-"""Fail-closed configuration. Secrets belong in Railway Variables, never Git."""
+"""Fail-closed game-action configuration; owner-selected public dashboard. Secrets belong in Railway Variables, never Git."""
 
 import os
 from pathlib import Path
@@ -25,6 +25,12 @@ def monitoring_enabled():
 def auto_start_enabled():
     # Narrow opt-in: no renting, claiming, registration or arbitrary mutations.
     return os.environ.get('AUTO_START_TRIPS_ENABLED', '').lower() == 'true'
+
+
+def dashboard_public():
+    # Owner requested direct URL access. Does NOT enable any game action.
+    # Only an explicit true (or the default) is public; invalid values stay private.
+    return os.environ.get('DASHBOARD_PUBLIC', 'true').strip().lower() == 'true'
 
 
 def initialize_data():
