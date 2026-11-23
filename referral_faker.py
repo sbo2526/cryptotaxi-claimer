@@ -33,6 +33,8 @@ Usage:
     python3 referral_faker.py --check --force          # force-check now
 """
 
+from runtime_config import ACCOUNT_CREATION_ENABLED
+
 import json
 import os
 import sys
@@ -533,6 +535,10 @@ def run_check():
 
 
 def main():
+    if not ACCOUNT_CREATION_ENABLED:
+        log.info("Automatic account creation is disabled")
+        return
+
     args = sys.argv[1:]
 
     update_status(

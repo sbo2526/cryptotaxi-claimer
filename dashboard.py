@@ -13,6 +13,8 @@ Usage:
   python3 dashboard.py [port]        # default 8080
 """
 
+from runtime_config import ACCOUNT_CREATION_ENABLED
+
 import html
 import json
 import os
@@ -596,6 +598,15 @@ def creator_status_info():
     remaining = max(0, target - current)
     pct = (current / target * 100) if target > 0 else 0
 
+    if not ACCOUNT_CREATION_ENABLED:
+        return {
+            "enabled": False, "running": False, "done": False,
+            "current": current, "target": target, "remaining": remaining,
+            "pct": pct, "phase": "disabled",
+            "message": "ساخت خودکار اکانت‌ها غیرفعال است",
+            "next_cycle_ts": None, "countdown_seconds": None,
+        }
+
     # --- Primary source: creator_status.json (written live by account_creator) ---
     status_data = load_json(CREATOR_STATUS_FILE, {})
 
@@ -901,7 +912,9 @@ def creator_status_section(info):
     started_at = info.get("started_at", "尚无")
     cycle_elapsed = info.get("cycle_elapsed")
 
-    if done:
+    if info.get("enabled") is False:
+        badge = "<span class='creator-status__badge creator-status__badge--idle'>⛔ غیرفعال</span>"
+    elif done:
         badge = "<span class='creator-status__badge creator-status__badge--done'>✅ تکمیل شد</span>"
     elif running:
         badge = "<span class='creator-status__badge creator-status__badge--active'><span class='dot' style='width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite'></span> در حال اجرا</span>"
@@ -998,6 +1011,8 @@ def creator_status_section(info):
 
 def referral_faker_status_section():
     """HTML section showing referral faker status (dormant/active)."""
+    if not ACCOUNT_CREATION_ENABLED:
+        return "<div class='creator-status'>⛔ ساخت خودکار اکانت‌های ریفرال غیرفعال است</div>"
     data = load_json(REFERRAL_STATUS_FILE, {})
     if not data:
         return ""
