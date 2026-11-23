@@ -107,6 +107,41 @@ class MonitorSafetyTests(unittest.TestCase):
                 self.assertIn('City Taxi', panel)
                 self.assertIn('dir="ltr">' + ('—' if not balance else f'{balance["usdt"]:.4f}'), panel)
 
+    def test_extra_trip_fields_survive_snapshot_and_dashboard_without_summing(self):
+        import dashboard
+        self.session.post.return_value = response(payload={
+            'myCars': [{'name': 'Primary taxi', 'canDrive': True,
+                        'quota': {'used': 10, 'limit': 10, 'bonus': 4}}],
+            'rentedCars': [{'name': 'Rental taxi', 'canDrive': False,
+                            'quota': {'used': 0, 'limit': 5, 'bonus': 0}}],
+            'bonusTrips': 50,
+        })
+        self.client.poll()
+        state = json.loads(Path(claimer.STATUS_FILE).read_text())
+        cars = state['main']['cars']
+        self.assertEqual(state['main']['bonus_trips'], 50)
+        self.assertEqual(cars[0]['bonus'], 4)
+        self.assertEqual(cars[0]['status'], 'idle')
+        self.assertEqual(cars[1]['bonus'], 0)
+        self.assertEqual(cars[1]['status'], 'unavailable')
+        with patch.object(dashboard, 'banned_accounts_info', return_value=[]):
+            panel = dashboard.account_data_section(dashboard.dashboard_view(state))
+        self.assertIn('quota-count">10 از 10</span>', panel)
+        self.assertIn('car-bonus-count">4</span>', panel)
+        self.assertIn('car-bonus-count">0</span>', panel)
+        self.assertIn('account-bonus-count">50</strong>', panel)
+        self.assertNotIn('>54<', panel)
+        self.assertNotIn('>60<', panel)
+
+    def test_missing_extra_trip_and_quota_values_stay_unknown(self):
+        self.session.post.return_value = response(payload={'myCars': [{'canDrive': True}]})
+        self.client.poll()
+        account = json.loads(Path(claimer.STATUS_FILE).read_text())['main']
+        self.assertIsNone(account['bonus_trips'])
+        for key in ('used', 'limit', 'bonus'):
+            self.assertIsNone(account['cars'][0][key])
+        self.assertEqual(account['cars'][0]['status'], 'idle')
+
     def test_429_and_retry_after_never_immediately_repeat(self):
         self.session.post.return_value = response(429, headers={'Retry-After': '1200'})
         with self.assertRaises(RetryLater) as result:

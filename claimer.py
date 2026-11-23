@@ -144,8 +144,10 @@ def car_snapshot(car, rented=False):
         'id': car.get('id'), 'name': car.get('name', 'تاکسی'), 'plate': car.get('plate', ''),
         'status': status, 'rented': rented,
         'ends_at': trip.get('endsAt'), 'started_at': trip.get('startedAt', 0),
-        'used': quota.get('used', 0), 'limit': quota.get('limit', 0),
-        'bonus': quota.get('bonus', 0),
+        # Missing counts are unknown, not zero; quota and extra trips are
+        # independent reported fields, not a computed eligibility decision.
+        'used': quota.get('used'), 'limit': quota.get('limit'),
+        'bonus': quota.get('bonus'),
         'block_code': block.get('code', '') if isinstance(block, dict) else 'blocked',
         'block_msg': ((block.get('msg') or block.get('message') or '')
                       if isinstance(block, dict) else str(block)),
@@ -260,7 +262,7 @@ class ReadOnlyMonitor:
                 '_meta': {'monitor_status': 'read_only', 'monitor_user': self.user, 'date': timestamp[:10]},
                 self.user: {'last_run': timestamp, 'last_result': 'OK', 'cars': cars,
                             'wallet': {'usdt': balances.get('usdt'), 'cash': balances.get('efectivo')},
-                            'bonus_trips': state.get('bonusTrips', 0),
+                            'bonus_trips': state.get('bonusTrips'),
                             'stats': {'trips': stats.get('trips', 0), 'usdt_earned': stats.get('usdtEarned', 0)}},
             }
             with state_lock:

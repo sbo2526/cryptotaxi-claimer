@@ -296,6 +296,13 @@ def status_section(view):
     </section>'''
 
 
+def trip_count_text(value):
+    """Reported nonnegative integer counts only; never invent a zero/total."""
+    if finite_number(value) and value >= 0 and value % 1 == 0:
+        return esc(int(value))
+    return 'نامشخص'
+
+
 def car_card(car):
     status = car.get('status', 'unavailable')
     name = esc(car.get('name') or 'تاکسی بدون نام')
@@ -309,9 +316,10 @@ def car_card(car):
         detail = '<p>استارت خودکار غیرفعال است.</p>'
     else:
         detail = f'<p>{esc(car.get("block_msg") or "جزئیات بیشتری از محدودیت ثبت نشده است.")}</p>'
-    quota = ''
-    if finite_number(car.get('limit')) and car['limit'] > 0 and finite_number(car.get('used')):
-        quota = f'<p class="muted">سهمیهٔ مصرف‌شده: {esc(car["used"])} از {esc(car["limit"])}</p>'
+    quota = f'''<p class="muted">سهمیهٔ ثبت‌شده (مصرف‌شده از سقف):
+      <span class="quota-count">{trip_count_text(car.get('used'))} از {trip_count_text(car.get('limit'))}</span></p>
+      <p class="muted">سفر اضافهٔ این تاکسی (مقدار ثبت‌شده):
+      <span class="car-bonus-count">{trip_count_text(car.get('bonus'))}</span></p>'''
     return f'''<article class="taxi-card"><div class="taxi-heading"><span aria-hidden="true">🚕</span>
       <h3>{name}</h3><span class="tag">{ownership}</span></div><p class="plate" dir="auto">{plate}</p>
       <span class="taxi-state">{label}</span>{detail}{quota}</article>'''
@@ -338,7 +346,11 @@ def account_data_section(view):
         <article class="metric"><span>تاکسی‌های ثبت‌شده</span><strong>{len(cars)}</strong></article>
         <article class="metric"><span>در حال سفر</span><strong>{sum(car.get('status') == 'on_trip' for car in cars)}</strong></article>
         <article class="metric"><span>آمادهٔ حرکت</span><strong>{sum(car.get('status') == 'idle' for car in cars)}</strong></article>
-      </div><div class="taxi-grid">{cards}</div></section>'''
+      </div><p class="data-note">سفر اضافهٔ اکانت (مقدار ثبت‌شده):
+        <strong class="account-bonus-count">{trip_count_text(sample.get('bonus_trips'))}</strong><br>
+        سهمیه و سفرهای اضافه جدا هستند؛ رسیدن مصرف به سقف سهمیه، به‌تنهایی پایان همهٔ سفرها را ثابت نمی‌کند.
+        مقدار اضافهٔ اکانت با مقدار هر تاکسی جمع زده نشده است؛ وضعیت حرکت طبق آخرین پاسخ سایت است.</p>
+      <div class="taxi-grid">{cards}</div></section>'''
 
 
 def disclosure(panel_id, title, badge, body, icon):

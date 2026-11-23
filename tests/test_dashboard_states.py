@@ -84,6 +84,51 @@ class DashboardStateTests(unittest.TestCase):
         self.assertNotIn('خطای امروز', panel)
         self.assertNotIn('کلیم', panel)
 
+    def test_car_quota_and_extra_trips_are_separate_not_a_total(self):
+        car = {'status': 'idle', 'name': 'Primary taxi', 'used': 10, 'limit': 10, 'bonus': 50}
+        panel = dashboard.car_card(car)
+        self.assertIn('quota-count">10 از 10</span>', panel)
+        self.assertIn('car-bonus-count">50</span>', panel)
+        self.assertIn('آمادهٔ حرکت', panel)
+        self.assertNotIn('60', panel)
+        self.assertNotIn('تمام شده', panel)
+
+    def test_account_extra_trips_are_not_copied_to_every_car(self):
+        view = dashboard.dashboard_view(snapshot(bonus_trips=50, cars=[
+            {'status': 'idle', 'used': 10, 'limit': 10, 'bonus': 2},
+            {'status': 'unavailable', 'used': 0, 'limit': 5},
+        ]), NOW)
+        panel = dashboard.account_data_section(view)
+        self.assertIn('account-bonus-count">50</strong>', panel)
+        self.assertIn('car-bonus-count">2</span>', panel)
+        self.assertIn('car-bonus-count">نامشخص</span>', panel)
+        self.assertNotIn('car-bonus-count">50</span>', panel)
+        self.assertNotIn('>52<', panel)
+        self.assertNotIn('>60<', panel)
+
+    def test_unknown_trip_counts_are_not_fabricated_zero_or_fifty(self):
+        for invalid in (None, -1, True, False, '50', '<script>bad</script>',
+                        [], {}, 0.5, float('nan'), float('inf'), 10**400):
+            with self.subTest(value=repr(invalid)[:60]):
+                self.assertEqual(dashboard.trip_count_text(invalid), 'نامشخص')
+        for valid in (0, 10, 50, 50.0):
+            self.assertEqual(dashboard.trip_count_text(valid), str(int(valid)))
+        panel = dashboard.car_card({'status': 'idle'})
+        self.assertIn('car-bonus-count">نامشخص</span>', panel)
+        self.assertNotIn('>50<', panel)
+        self.assertNotIn('>0<', panel)
+        view = dashboard.dashboard_view(snapshot(), NOW)
+        self.assertIn('account-bonus-count">نامشخص</strong>', dashboard.account_data_section(view))
+
+    def test_zero_extras_are_displayed_without_overriding_reported_availability(self):
+        panel = dashboard.car_card({'status': 'idle', 'used': 10, 'limit': 10, 'bonus': 0})
+        self.assertIn('car-bonus-count">0</span>', panel)
+        self.assertIn('آمادهٔ حرکت', panel)
+        blocked = dashboard.car_card({'status': 'unavailable', 'bonus': 50, 'block_msg': 'Not your turn'})
+        self.assertIn('در دسترس نیست', blocked)
+        self.assertIn('Not your turn', blocked)
+        self.assertNotIn('آمادهٔ حرکت', blocked)
+
     def test_old_snapshot_remains_honestly_labeled_as_historical(self):
         self.enable()
         view = dashboard.dashboard_view(snapshot(NOW - timedelta(hours=1)), NOW)
