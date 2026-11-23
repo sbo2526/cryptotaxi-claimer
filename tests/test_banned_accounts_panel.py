@@ -22,7 +22,7 @@ class BannedAccountsPanelTests(unittest.TestCase):
             'detected_at': '2026-11-23 10:00:00',
         }]}):
             page = dashboard.render()
-        for expected in ('اکانت‌های بن‌شده', '1 اکانت بن‌شده', 'removed-account',
+        for expected in ('اکانت‌های بن‌شده', '0 اکانت بن‌شده', 'removed-account',
                          'HTTP 403 Forbidden on login', '2026-11-23 10:00:00'):
             self.assertIn(expected, page)
         self.assertNotIn('دسترسی به ایمیل‌های اکانت‌ها', page)

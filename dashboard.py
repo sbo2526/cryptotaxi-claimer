@@ -14,6 +14,7 @@ Usage:
 """
 
 from runtime_config import ACCOUNT_CREATION_ENABLED
+from ban_detection import is_ban_error, is_confirmed_ban_record
 
 import html
 import json
@@ -1121,10 +1122,14 @@ def banned_accounts_info():
             continue
         detected_at = str(record.get("detected_at") or "")
         previous = by_user.get(user)
-        if previous is None or detected_at >= previous["detected_at"]:
+        confirmed = is_confirmed_ban_record(record)
+        if previous and previous["confirmed"] and not confirmed:
+            continue
+        if previous is None or (confirmed and not previous["confirmed"]) or detected_at >= previous["detected_at"]:
             by_user[user] = {
                 "username": user,
                 "reason": str(record.get("reason") or ""),
+                "confirmed": confirmed,
                 "detected_at": detected_at,
             }
 
@@ -1138,8 +1143,13 @@ def banned_accounts_info():
             if not isinstance(user, str) or not user.strip():
                 continue
             entry = by_user.setdefault(user, {
-                "username": user, "reason": "", "detected_at": "",
+                "username": user, "reason": "", "detected_at": "", "confirmed": False,
             })
+            if is_ban_error(error_text=account.get("ban_reason")):
+                if not entry["confirmed"]:
+                    entry["reason"] = str(account["ban_reason"])
+                    entry["detected_at"] = str(account.get("banned_at") or "")
+                entry["confirmed"] = True
             entry["reason"] = entry["reason"] or str(account.get("ban_reason") or "")
             entry["detected_at"] = entry["detected_at"] or str(account.get("banned_at") or "")
 
@@ -1151,7 +1161,7 @@ def active_accounts_info():
     accounts = load_json(ACCOUNTS_FILE, [])
     if not isinstance(accounts, list):
         return []
-    banned = {entry["username"] for entry in banned_accounts_info()}
+    banned = {entry["username"] for entry in banned_accounts_info() if entry["confirmed"]}
     active = []
     seen = set()
     for account in accounts:
@@ -1168,15 +1178,17 @@ def active_accounts_info():
 def banned_accounts_section():
     """Show recorded bans without changing accounts or triggering requests."""
     records = banned_accounts_info()
+    confirmed_count = sum(record["confirmed"] for record in records)
     rows = []
     for record in records:
         user = esc(record["username"])
         reason = esc(record["reason"] or "دلیل ثبت نشده")
         detected_at = esc(record["detected_at"] or "زمان ثبت نشده")
+        label = "🚫 بن‌شده" if record["confirmed"] else "⚠️ تأییدنشده (سابقهٔ قدیمی)"
         rows.append(f"""
           <tr>
             <td style="padding:12px;overflow-wrap:anywhere">{user}</td>
-            <td style="padding:12px;color:var(--red);white-space:nowrap">🚫 بن‌شده</td>
+            <td style="padding:12px;color:var(--red);white-space:nowrap">{label}</td>
             <td style="padding:12px;color:var(--muted);min-width:180px;overflow-wrap:anywhere">{reason}</td>
             <td style="padding:12px;white-space:nowrap"><span dir="ltr">{detected_at}</span></td>
           </tr>""")
@@ -1191,14 +1203,14 @@ def banned_accounts_section():
       <span class="creator-status__icon" aria-hidden="true">🚫</span>
       <span class="creator-status__title">اکانت‌های بن‌شده</span>
       <span class="creator-status__badge" style="color:var(--red);border:1px solid currentColor">
-        {len(records)} اکانت بن‌شده
+        {confirmed_count} اکانت بن‌شده
       </span>
       <span class="status-panel__chevron" aria-hidden="true">⌄</span>
     </summary>
     <div class="status-panel__body">
     <p style="color:var(--muted);font-size:13px;line-height:1.9;margin:0 0 16px">
       بن‌های ثبت‌شده توسط سیستم، شامل اکانت‌های حذف‌شده از فهرست پردازش.
-      خطای ورود به‌تنهایی در این بخش به معنی بن‌شدن نیست.
+      فقط پیام صریح تعلیق مبنای حذف است؛ سوابق قدیمیِ تأییدنشده باعث حذف اکانت نمی‌شوند.
     </p>
     <div style="border:1px solid var(--border);border-radius:10px;overflow:auto;max-height:320px">
       <table style="width:100%;border-collapse:collapse;font-size:12.5px;text-align:right">
