@@ -11,8 +11,10 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
+from monitor_runtime import write_report, record_exit
 from runtime_config import initialize_data, monitoring_enabled
 
 HERE = Path(__file__).resolve().parent
@@ -39,17 +41,25 @@ def main():
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     commands = service_commands()
+    # Fresh local path per supervisor: replicas/deployments never overwrite
+    # each other's pre-lock diagnostics on a shared DATA_DIR volume.
+    runtime_directory = tempfile.TemporaryDirectory(prefix='cryptotaxi-runtime-')
+    runtime_path = Path(runtime_directory.name) / 'monitor.json'
+    child_env = dict(os.environ, MONITOR_RUNTIME_FILE=str(runtime_path))
     try:
+        if 'monitor' in commands:
+            write_report('starting', path=runtime_path)
         for name, command in commands.items():
-            processes[name] = subprocess.Popen(command, cwd=HERE, stdin=subprocess.DEVNULL)
+            processes[name] = subprocess.Popen(command, cwd=HERE, stdin=subprocess.DEVNULL, env=child_env)
         while running:
             for name, process in list(processes.items()):
                 if process.poll() is not None:
                     if name == 'dashboard':
                         log.warning('Dashboard exited; restarting')
-                        processes[name] = subprocess.Popen(commands[name], cwd=HERE, stdin=subprocess.DEVNULL)
+                        processes[name] = subprocess.Popen(commands[name], cwd=HERE, stdin=subprocess.DEVNULL, env=child_env)
                     else:
                         log.warning('Monitor stopped. It will NOT restart without manual intervention.')
+                        record_exit(path=runtime_path)
                         del processes[name]
             time.sleep(2)
     finally:
@@ -62,6 +72,7 @@ def main():
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+        runtime_directory.cleanup()
 
 
 if __name__ == '__main__':

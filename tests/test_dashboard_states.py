@@ -40,7 +40,7 @@ class DashboardStateTests(unittest.TestCase):
     def test_empty_dashboard_has_no_fake_zero_metrics_or_creator_panel(self):
         with patch.object(dashboard, 'load_json', side_effect=lambda path, default: default):
             page = dashboard.render()
-        self.assertIn('هنوز اطلاعاتی از اکانت دریافت نشده است.', page)
+        self.assertIn('اطلاعات ذخیره‌شده‌ای از اکانت در دسترس نیست.', page)
         self.assertIn('پایش خارجی خاموش است؛ هیچ عملیات خودکاری انجام نمی‌شود.', page)
         self.assertIn('پایش خاموش', page)
         self.assertNotIn('class="metrics"', page)
@@ -61,7 +61,7 @@ class DashboardStateTests(unittest.TestCase):
     def test_enabled_flag_is_not_reported_as_a_running_monitor(self):
         self.enable()
         view = dashboard.dashboard_view({}, NOW)
-        self.assertEqual(view['label'], 'در انتظار اولین دریافت')
+        self.assertEqual(view['label'], 'دریافت موفق ثبت نشده است')
         self.assertNotIn('پایش خارجی خاموش است', view['empty_note'])
         self.assertIsNone(view['received'])
 

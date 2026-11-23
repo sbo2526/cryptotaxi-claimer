@@ -17,6 +17,7 @@ import os
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+from monitor_runtime import read_report
 from ban_detection import is_ban_error, is_confirmed_ban_record
 from runtime_config import (DATA_DIR, primary_username, monitoring_enabled, initialize_data,
                             ALLOWED_PRIMARY_ACCOUNT)
@@ -158,6 +159,9 @@ def active_accounts_info():
     user = primary_username()
     if not user:
         return []
+    report = read_report(user=user)
+    if report and report['stage'] == 'stopped' and report['code'] == 'suspended':
+        return []
     banned = {entry["username"] for entry in banned_accounts_info() if entry["confirmed"]}
     return [] if user in banned else [{"username": user}]
 
@@ -170,6 +174,11 @@ def finite_number(value):
 
 
 STOP_MESSAGES = {
+    'invalid_config': 'تنظیم اکانت، رمز یا اتصال دیتابیس ناقص یا نامعتبر است؛ Variables همین سرویس را بررسی کنید.',
+    'database_error': 'اتصال یا آماده‌سازی دیتابیس قفل ناموفق بوده است؛ اتصال PostgreSQL و دسترسی آن را بررسی کنید. هیچ ورود جدیدی به سایت انجام نشد.',
+    'already_running': 'اجرای دیگری قفل این اکانت را دارد؛ این اجرا به سایت وارد نشد. سرویس یا Replica تکراری و هم‌پوشانی استقرارها را بررسی کنید؛ قفل را حذف نکنید.',
+    'safety_unavailable': 'مالکیت قفل یا وضعیت ایمنی دیتابیس در دسترس نیست؛ پایش متوقف شده و اتصال مجدد خودکار انجام نمی‌شود.',
+    'worker_exited': 'فرایند پایش خارج شده است؛ علت مشخصی ثبت نکرده است. Runtime Logs را بررسی کنید؛ راه‌اندازی مجدد خودکار انجام نمی‌شود.',
     'needs_login': 'نشست ورود پذیرفته نشد؛ بررسی و ورود دستی لازم است. ورود مجدد خودکار انجام نمی‌شود.',
     'access_denied': 'دسترسی رد شده است؛ پایش تا بررسی دستی متوقف می‌ماند.',
     'rate_limited': 'محدودیت درخواست یا انتظار تکراری؛ پایش برای بررسی دستی متوقف شده است.',
@@ -177,6 +186,13 @@ STOP_MESSAGES = {
     'manual_review': 'خطا یا مشکل ایمنی ثبت شده است؛ بررسی دستی لازم است.',
     'suspended': 'تعلیق ثبت شده است؛ پایش نباید مجدداً فعال شود.',
 }
+STARTUP_MESSAGES = {
+    'starting': 'شروع فرایند پایش ثبت شده است؛ هنوز دریافت موفقی تأیید نشده است.',
+    'acquiring_lock': 'آخرین مرحلهٔ ثبت‌شده: گرفتن قفل مشترک دیتابیس، پیش از ورود به سایت.',
+    'logging_in': 'آخرین مرحلهٔ ثبت‌شده: تلاش ورود؛ موفقیت ورود هنوز تأیید نشده است.',
+    'waiting_first_read': 'پاسخ بدون خطا برای ورود ثبت شده است؛ دریافت اطلاعات هنوز تأیید نشده و فاصلهٔ درخواست‌ها و بودجهٔ مشترک باید رعایت شود.',
+}
+
 SCHEDULE_REASONS = {
     'trip_end': 'بر اساس پایان سفر ثبت‌شده',
     'unknown_timer': 'زمان سفر نامشخص است؛ بررسی دوره‌ای',
@@ -226,7 +242,9 @@ def dashboard_view(status=None, now=None):
     user = primary_username()
     enabled = monitoring_enabled()
     activity = saved_activity(status, user, now)
-    suspended = any(row['username'] == user and row['confirmed'] for row in banned_accounts_info())
+    runtime = read_report(user=user, now=now)
+    suspended = any(row['username'] == user and row['confirmed'] for row in banned_accounts_info()) or bool(
+        runtime and runtime['stage'] == 'stopped' and runtime['code'] == 'suspended')
     account = status.get(user) if user else None
     received = None
     sample = None
@@ -249,17 +267,26 @@ def dashboard_view(status=None, now=None):
         label, tone, note = 'در انتظار تنظیم اکانت', 'warning', 'نام اکانت اصلی هنوز مشخص نشده است.'
     elif not complete_config:
         label, tone, note = 'پیکربندی پایش ناقص', 'warning', 'تنظیمات لازم برای پایش کامل نیست؛ فعال‌بودن آن تأیید نمی‌شود.'
+    elif runtime and runtime['stage'] == 'stopped':
+        label, tone, note = 'پایش متوقف شده است', 'warning', STOP_MESSAGES.get(runtime['code'], STOP_MESSAGES['manual_review'])
+    elif runtime and runtime['stage'] in STARTUP_MESSAGES:
+        tone, note = 'warning', STARTUP_MESSAGES[runtime['stage']]
+        if now - runtime['updated'] > timedelta(minutes=3):
+            label = 'شروع پایش نیازمند بررسی است'
+            note += ' بیش از سه دقیقه از این گزارش گذشته؛ ادامهٔ اجرا تأیید نمی‌شود. Runtime Logs را بررسی کنید.'
+        else:
+            label = 'شروع پایش ثبت شده است'
     elif activity and activity['status'] in ('stopped', 'suspended'):
         label, tone, note = 'پایش متوقف شده است', 'warning', activity['message']
     elif activity and activity['status'] == 'cooldown':
         label, tone, note = 'مهلت انتظار ثبت شده است', 'warning', 'بررسی بعدی باید محدودیت سرور و بودجهٔ مشترک درخواست را رعایت کند.'
     elif received is None:
-        label, tone, note = 'در انتظار اولین دریافت', 'warning', 'هنوز دریافت موفقی برای اکانت اصلی ثبت نشده است.'
+        label, tone, note = 'دریافت موفق ثبت نشده است', 'warning', 'دادهٔ موفقی در این محل ذخیره نشده و وضعیت اجرای پایش تأیید نشده است؛ روشن‌بودن تنظیم پایش به‌تنهایی نشانهٔ اجرا نیست.'
     elif stale:
         label, tone, note = 'اطلاعات قدیمی', 'warning', 'بیش از ۱۰ دقیقه از آخرین دریافت موفق گذشته است.'
     else:
         label, tone, note = 'آخرین دریافت تازه است', 'success', 'این وضعیت تازگی داده را نشان می‌دهد، نه تضمین اجرای فعلی پایش.'
-    if enabled and not suspended and activity and activity['next_check']:
+    if enabled and not suspended and not (runtime and runtime['stage'] in ('stopped', *STARTUP_MESSAGES)) and activity and activity['next_check']:
         scheduled = fmt_jalali(activity['next_check'].strftime('%Y-%m-%d %H:%M:%S'))
         if activity['next_check'] <= now:
             note += ' موعد بررسی ثبت‌شده گذشته است؛ دریافت تازه یا اجرای فعلی پایش تأیید نمی‌شود.'
@@ -272,20 +299,24 @@ def dashboard_view(status=None, now=None):
         empty_note = 'پایش خارجی خاموش است؛ هیچ عملیات خودکاری انجام نمی‌شود.'
     elif suspended:
         empty_note = 'پایش این اکانت متوقف است؛ سابقهٔ تعلیق را در پایین صفحه ببینید.'
+    elif runtime and runtime['stage'] == 'stopped':
+        empty_note = STOP_MESSAGES.get(runtime['code'], STOP_MESSAGES['manual_review'])
     elif activity and activity['status'] in ('stopped', 'suspended'):
         empty_note = activity['message']
     else:
         empty_note = 'دریافت موفقی ثبت نشده است؛ هیچ عملیات استارت، اجاره یا دریافت جایزه انجام نمی‌شود.'
+    if sample is None:
+        empty_note += ' اگر قبلاً اطلاعات نمایش داده می‌شد، اتصال Volume پایدار به /app/data و مقدار DATA_DIR را بررسی کنید؛ نبود داده به‌تنهایی علت را مشخص نمی‌کند.'
     return {'user': user, 'enabled': enabled, 'suspended': suspended, 'sample': sample,
             'received': received, 'stale': stale, 'label': label, 'tone': tone, 'note': note,
-            'empty_note': empty_note, 'activity': activity}
+            'empty_note': empty_note, 'activity': activity, 'runtime': runtime}
 
 
 def status_section(view):
     account_label = 'تعلیق‌شده' if view['suspended'] else ('تنظیم‌شده' if view['user'] else 'تنظیم نشده')
     account_note = esc(view['user']) if view['user'] else (
         f'تنها اکانت مجاز: {esc(ALLOWED_PRIMARY_ACCOUNT)}. مقدار PRIMARY_ACCOUNT باید همین باشد؛ این کار پایش را روشن نمی‌کند.')
-    received = fmt_jalali(view['received'].strftime('%Y-%m-%d %H:%M:%S')) if view['received'] else 'هنوز دریافت نشده'
+    received = fmt_jalali(view['received'].strftime('%Y-%m-%d %H:%M:%S')) if view['received'] else 'در دادهٔ محلی ثبت نشده'
     return f'''<section class="overview" aria-label="وضعیت داشبورد">
       <article class="overview-card"><span class="eyebrow">وضعیت پایش</span>
         <strong class="status-text {view['tone']}">{esc(view['label'])}</strong><p>{esc(view['note'])}</p></article>
@@ -328,7 +359,7 @@ def car_card(car):
 def account_data_section(view):
     if view['sample'] is None:
         return f'''<section id="emptyState" class="empty-state" aria-labelledby="emptyTitle">
-          <span class="empty-icon" aria-hidden="true">⏸</span><h2 id="emptyTitle">هنوز اطلاعاتی از اکانت دریافت نشده است.</h2>
+          <span class="empty-icon" aria-hidden="true">⏸</span><h2 id="emptyTitle">اطلاعات ذخیره‌شده‌ای از اکانت در دسترس نیست.</h2>
           <p>{esc(view['empty_note'])}</p></section>'''
     sample = view['sample']
     cars = sample['cars']
