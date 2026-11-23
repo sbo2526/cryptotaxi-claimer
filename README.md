@@ -20,6 +20,13 @@
   network failure, malformed state or loss of lock ownership.
 - Shared PostgreSQL ownership is required BEFORE any external request. All
   deployments for the primary account must use the **same database**.
+  During initial worker startup only, an occupied lock is rechecked every ten
+  seconds on the same connection for up to 120 seconds, so an overlapping old
+  Railway deployment can shut down normally. No login, site request or shared
+  status write occurs while waiting. There is no forced unlock, process kill,
+  database reconnect or automatic worker restart. A still-occupied lock stops
+  with `already_running`; connection errors and invalid results stop immediately.
+  Once acquired, a lost lock is never reacquired by that worker.
 - No hidden transport retries, redirects, proxy switching or repeated login.
   Each worker makes **at most one login attempt** and reuses the same in-memory
   `requests.Session` (including server cookies) for all reads. Session expiry does
@@ -176,9 +183,15 @@ first-receive wait. The supervisor records an exit without restarting the monito
 and preserves any more specific worker-reported cause. A supervisor/container
 crash or unwritable diagnostics directory can still prevent a report; missing
 reports are shown as unknown, not evidence of a running worker. These reports are
-observability only: no automatic retry, re-login, lock bypass or database reconnect
-has been added. An occupied lock can be an old deployment still shutting down or
-a genuinely active other service; do not force-release it or restart repeatedly.
+observability only: no website retry, re-login, lock bypass or database reconnect
+is authorized by these reports. The initial `waiting_lock` stage distinguishes a
+bounded deployment handover wait (up to two minutes) from a final `already_running`
+stop. An occupied lock can be an old deployment still shutting down or a genuinely
+active other service; its holder is not identified by this message. If contention
+persists beyond the startup window, keep the intended Railway service at one
+replica and stop the redundant deployment/service or local worker after identifying
+it. Do not force-release the database lock or restart repeatedly. The app cannot
+change Railway replicas, volumes or other projects on your behalf.
 
 A previously visible balance disappearing after a deployment is different from a
 slow first read. Check that the service has a persistent volume mounted at

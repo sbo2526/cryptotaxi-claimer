@@ -70,6 +70,10 @@ class RequestPacer:
         self.next_allowed = max(self.next_allowed, self.clock() + seconds)
 
 
+STARTUP_LOCK_WAIT_SECONDS = 120
+LOCK_RECHECK_SECONDS = 10
+
+
 class SharedMonitorLock:
     """PostgreSQL session advisory lock, shared by ALL replicas/projects.
 
@@ -77,7 +81,15 @@ class SharedMonitorLock:
     website access. Use the SAME database on every deployment for this account.
     A lost connection is never silently reconnected by this worker.
     """
-    def __init__(self, user, connect=None):
+    def __init__(self, user, connect=None, *, startup_wait=0, clock=None, sleep=None, on_wait=None):
+        # Bounded, initial acquisition only. Never reconnect or retake a lost lock.
+        if (isinstance(startup_wait, bool) or not isinstance(startup_wait, (int, float))
+                or not 0 <= startup_wait <= STARTUP_LOCK_WAIT_SECONDS):
+            raise SafetyStop('Invalid startup lock wait', 'invalid_config')
+        self.startup_wait = startup_wait
+        self.clock = clock or time.monotonic
+        self.sleep = sleep or time.sleep
+        self.on_wait = on_wait
         self.user = user
         self.connection = None
         self.connect = connect
@@ -93,9 +105,7 @@ class SharedMonitorLock:
                 import psycopg
                 self.connect = psycopg.connect
             self.connection = self.connect(url, autocommit=True, connect_timeout=10)
-            result = self.connection.execute('SELECT pg_try_advisory_lock(%s)', (self.key,)).fetchone()
-            if not result or result[0] is not True:
-                raise SafetyStop('Another monitor already owns this account', 'already_running')
+            self._acquire_initial_lock()
             self.connection.execute('''CREATE TABLE IF NOT EXISTS cryptotaxi_monitor_safety (
                 monitor_key BIGINT PRIMARY KEY,
                 suspended BOOLEAN NOT NULL DEFAULT FALSE,
@@ -121,7 +131,28 @@ class SharedMonitorLock:
             self.close()
             # Do not expose DSNs, passwords, hostnames or driver exception text.
             raise SafetyStop('Unable to obtain exclusive monitor ownership', 'database_error') from None
+        except BaseException:
+            self.close()  # SIGINT/SystemExit during startup must not leak a session.
+            raise
         return self
+
+    def _acquire_initial_lock(self):
+        deadline = self.clock() + self.startup_wait
+        # An attempt cap also prevents a busy loop if the injected clock stalls.
+        attempts = 1 + math.ceil(self.startup_wait / LOCK_RECHECK_SECONDS)
+        for attempt in range(attempts):
+            row = self.connection.execute('SELECT pg_try_advisory_lock(%s)', (self.key,)).fetchone()
+            if row and row[0] is True:
+                return  # Stop querying: session advisory locks are reentrant.
+            if not row or row[0] is not False:
+                raise SafetyStop('Invalid ownership response', 'database_error')
+            remaining = deadline - self.clock()
+            if remaining <= 0 or attempt == attempts - 1:
+                break
+            if attempt == 0 and self.on_wait:
+                self.on_wait()  # Local stage evidence only; no shared-state writes.
+            self.sleep(min(LOCK_RECHECK_SECONDS, remaining))
+        raise SafetyStop('Another monitor still owns this account; startup wait expired', 'already_running')
 
     def check(self):
         try:

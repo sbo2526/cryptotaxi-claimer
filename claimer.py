@@ -23,7 +23,7 @@ from requests.adapters import HTTPAdapter
 
 from ban_detection import is_ban_error, is_confirmed_ban_record, suspension_reason
 from monitor_safety import (SafetyStop, RetryLater, RequestPacer, SharedMonitorLock,
-                            check_policy, retry_after_seconds)
+                            check_policy, retry_after_seconds, STARTUP_LOCK_WAIT_SECONDS)
 from monitor_runtime import write_report
 from runtime_config import DATA_DIR, initialize_data, monitoring_enabled, primary_username, auto_start_enabled
 from trip_rules import start_block, valid_car_id, timestamp_ms
@@ -462,7 +462,8 @@ def main():
         return
     try:
         write_report('acquiring_lock')
-        with SharedMonitorLock(user) as ownership:
+        with SharedMonitorLock(user, startup_wait=STARTUP_LOCK_WAIT_SECONDS,
+                               on_wait=lambda: write_report('waiting_lock')) as ownership:
             monitor = ReadOnlyMonitor(user, ownership)
             monitor.run()
     except SafetyStop as error:
