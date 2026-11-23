@@ -37,27 +37,21 @@ class CollapsiblePanelTests(unittest.TestCase):
         self.assertEqual(panel['attrs']['id'], panel_id)
         self.assertNotIn('open', panel['attrs'])
         self.assertEqual([child['tag'] for child in panel['children']], ['summary', 'div'])
-        self.assertIn('status-panel__body', panel['children'][1]['attrs']['class'])
-        self.assertIn('status-panel__chevron', html)
+        self.assertIn('panel-body', panel['children'][1]['attrs']['class'])
+        self.assertIn('chevron', html)
         self.assertEqual(parser.stack, [])
 
-    def test_disabled_creator_is_native_disclosure(self):
-        html = dashboard.creator_status_section({'enabled': False, 'current': 12})
-        self.assert_native_panel(html, 'accountCreatorPanel')
-        self.assertIn('⛔ غیرفعال', html)
-        self.assertIn('<b>12</b>', html)
-        self.assertNotIn('creatorCountdown', html)
-
-    def test_enabled_creator_is_native_disclosure(self):
-        html = dashboard.creator_status_section({'enabled': True, 'running': True})
-        self.assert_native_panel(html, 'accountCreatorPanel')
-        self.assertNotIn('creatorCountdown', html)
+    def test_events_is_native_disclosure(self):
+        with patch.object(dashboard, 'event_lines', return_value=[]):
+            html = dashboard.events_section()
+        self.assert_native_panel(html, 'eventsPanel')
+        self.assertIn('رویدادی برای نمایش وجود ندارد.', html)
 
     def test_banned_accounts_is_native_disclosure(self):
         with patch.object(dashboard, 'banned_accounts_info', return_value=[]):
             html = dashboard.banned_accounts_section()
         self.assert_native_panel(html, 'bannedAccountsPanel')
-        self.assertIn('0 اکانت بن‌شده', html)
+        self.assertIn('بدون سابقه', html)
 
     def test_full_dashboard_has_two_unique_disclosures_and_no_email_access_text(self):
         with patch.object(dashboard, 'load_json', side_effect=lambda path, default: default):
@@ -65,16 +59,36 @@ class CollapsiblePanelTests(unittest.TestCase):
         parser = PanelParser()
         parser.feed(html)
         self.assertEqual([p['attrs']['id'] for p in parser.panels],
-                         ['accountCreatorPanel', 'bannedAccountsPanel'])
+                         ['bannedAccountsPanel', 'eventsPanel'])
         self.assertNotIn('دسترسی به ایمیل‌های اکانت‌ها', html)
         self.assertNotIn('email-status', html)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node required for JS behavior test')
+    def test_trip_timer_does_not_promise_claim_or_restart(self):
+        harness = '''
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const timers = [
+  {dataset: {ends: '125000'}, textContent: ''},
+  {dataset: {ends: '1'}, textContent: ''},
+  {dataset: {ends: 'bad'}, textContent: 'unchanged'}
+];
+vm.runInNewContext(SCRIPT, {
+  document: {querySelectorAll: selector => selector.startsWith('.trip-timer') ? timers : []},
+  Date: {now: () => 0 + 60000}, setInterval() {}
+});
+assert.equal(timers[0].textContent, 'برآورد زمان باقی‌مانده: 1:05');
+assert.equal(timers[1].textContent, 'زمان ثبت‌شدهٔ سفر به پایان رسیده؛ منتظر دریافت بعدی');
+assert.equal(timers[2].textContent, 'unchanged');
+'''.replace('SCRIPT', json.dumps(dashboard.PAGE_JS))
+        subprocess.run(['node', '-e', harness], check=True, capture_output=True, text=True)
 
     @unittest.skipUnless(shutil.which('node'), 'Node required for JS behavior test')
     def test_each_panel_restores_and_saves_state_and_tolerates_blocked_storage(self):
         with patch.object(dashboard, 'load_json', side_effect=lambda path, default: default):
             html = dashboard.render()
         start = html.index('  // Keep each account panel')
-        end = html.index('  // Mission Center collapse', start)
+        end = html.index('  // End disclosure persistence', start)
         script = html[start:end]
         harness = '''
 const vm = require('node:vm');
@@ -83,9 +97,9 @@ const code = SCRIPT;
 function panel(id) {
   return {id, open: false, listeners: {}, addEventListener(name, fn) { this.listeners[name] = fn; }};
 }
-const first = panel('accountCreatorPanel');
+const first = panel('eventsPanel');
 const second = panel('bannedAccountsPanel');
-const stored = new Map([['status_panel_open_accountCreatorPanel', '1']]);
+const stored = new Map([['status_panel_open_eventsPanel', '1']]);
 const context = {
   document: { querySelectorAll: () => [first, second] },
   localStorage: {getItem: key => stored.get(key), setItem: (key, value) => stored.set(key, value)}
@@ -95,7 +109,7 @@ assert.equal(first.open, true);
 assert.equal(second.open, false);
 first.open = false; first.listeners.toggle();
 second.open = true; second.listeners.toggle();
-assert.equal(stored.get('status_panel_open_accountCreatorPanel'), '0');
+assert.equal(stored.get('status_panel_open_eventsPanel'), '0');
 assert.equal(stored.get('status_panel_open_bannedAccountsPanel'), '1');
 const reloaded = [panel(first.id), panel(second.id)];
 context.document.querySelectorAll = () => reloaded;

@@ -22,16 +22,15 @@ class SafeDefaultsTests(unittest.TestCase):
         self.assertFalse((root / 'referral_faker.py').exists())
         self.assertFalse((root / 'mail_reader.py').exists())
 
-    def test_creator_panel_cannot_be_reenabled(self):
-        panel = dashboard.creator_status_section({'enabled': True, 'current': 1})
-        self.assertIn('⛔ غیرفعال', panel)
-        self.assertNotIn('creatorCountdown', panel)
+    def test_creator_panel_is_not_part_of_read_only_dashboard(self):
+        self.assertNotIn('accountCreatorPanel', dashboard.render())
+        self.assertFalse(hasattr(dashboard, 'creator_status_section'))
 
     def test_only_primary_identity_can_appear(self):
         with patch.dict(os.environ, {'PRIMARY_ACCOUNT': 'main'}, clear=True), \
              patch.object(dashboard, 'banned_accounts_info', return_value=[]):
             self.assertEqual(dashboard.active_accounts_info(), [{'username': 'main'}])
-            self.assertEqual(dashboard.creator_status_info()['current'], 1)
+            self.assertEqual(len(dashboard.active_accounts_info()), 1)
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(dashboard.active_accounts_info(), [])
 
