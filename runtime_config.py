@@ -6,7 +6,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get('DATA_DIR', str(HERE / 'data'))).resolve()
 ACCOUNT_CREATION_ENABLED = False  # Removed, not configurable.
-AUTOMATIC_ACTIONS_ENABLED = False  # No start/rent/claim endpoints are permitted.
+AUTOMATIC_ACTIONS_ENABLED = False  # Legacy broad automation switch remains disabled.
 # Owner-selected public identity only. The password stays in Railway Variables.
 # An old PRIMARY_ACCOUNT value must not silently select a different account.
 ALLOWED_PRIMARY_ACCOUNT = 'bavafasobhan@gmail.com'
@@ -20,6 +20,11 @@ def primary_username():
 def monitoring_enabled():
     # Enable only after obtaining permission to use the site's API.
     return os.environ.get('SITE_MONITORING_ENABLED', '').lower() == 'true'
+
+
+def auto_start_enabled():
+    # Narrow opt-in: no renting, claiming, registration or arbitrary mutations.
+    return os.environ.get('AUTO_START_TRIPS_ENABLED', '').lower() == 'true'
 
 
 def initialize_data():

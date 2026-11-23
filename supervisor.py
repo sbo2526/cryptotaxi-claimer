@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start the protected dashboard and, only if opted in, a read-only monitor.
+"""Start the protected dashboard and, only if opted in, a primary-account worker.
 
 The monitor is never restarted automatically after failure/suspension. Cross-
 project exclusivity is enforced by its shared database lock, not a local PID.
