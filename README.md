@@ -85,6 +85,16 @@ restriction does not erase a suspension marker or allow a suspended account to r
 
 ### Dashboard display
 
+The dashboard uses a default dark palette (including cards, tables, disclosures,
+status messages and native browser controls), without JavaScript/theme storage or
+external assets. Persian text prefers the **locally installed B Nazanin** regular
+and bold faces through an Arabic-only `@font-face` definition; Latin identifiers
+keep their existing fonts. Labels use larger sizes for readability. **No B Nazanin
+font binary is included**: devices without it fall back to Tahoma/Arial. To ensure
+the exact face on every phone, a font file licensed for web embedding must first
+be supplied and integrated; naming a font in CSS alone cannot install it remotely.
+There are no font-CDN requests and no change to authentication or monitoring.
+
 The Persian RTL overview starts with a plain-language status and suggested next
 step. Three summary cards separate configured automatic starts, the **last
 successful saved receive** (Tehran time), and the planned next check. The primary
