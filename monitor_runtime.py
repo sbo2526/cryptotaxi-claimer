@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 from runtime_config import primary_username
 
 TZ = ZoneInfo('Asia/Tehran')
-STAGES = frozenset(('starting', 'acquiring_lock', 'logging_in', 'waiting_first_read',
+STAGES = frozenset(('starting', 'acquiring_lock', 'waiting_lock', 'logging_in', 'waiting_first_read',
                     'waiting', 'cooldown', 'stopped'))
 STOP_CODES = frozenset(('invalid_config', 'database_error', 'already_running',
                         'safety_unavailable', 'worker_exited', 'needs_login',
