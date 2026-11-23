@@ -1,92 +1,44 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Protected read-only dashboard: configuration, real data freshness and history.
+
+Rendering and browser refreshes read local files only; they never enable or call
+external monitoring. Missing/invalid account data is not presented as zero.
 """
-The Crypto Taxi — live dashboard (professional UI)
-
-A tiny stdlib HTTP server that renders a polished live HTML dashboard from
-the claimer's files (status.json, accounts.json, claimer.log).
-
-- GET  /        -> dashboard HTML (auto-refresh every 30s)
-- Protected, read-only routes; no account-management or mutation endpoints.
-
-Usage:
-  python3 dashboard.py [port]        # default 8080
-"""
-
-from runtime_config import DATA_DIR, primary_username, monitoring_enabled, initialize_data
-from ban_detection import is_ban_error, is_confirmed_ban_record
 
 import base64
 import binascii
+from datetime import date, datetime, timedelta
 import hmac
 import html
-import json
-import os
-import re
-import sys
-import time
-from datetime import date, datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
+import json
+import math
+import os
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-# Fix the program clock to Tehran timezone (Asia/Tehran, UTC+03:30)
-TZ = ZoneInfo("Asia/Tehran")
+from ban_detection import is_ban_error, is_confirmed_ban_record
+from runtime_config import DATA_DIR, primary_username, monitoring_enabled, initialize_data
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-STATUS_FILE = str(DATA_DIR / "status.json")
-EARNINGS_FILE = str(DATA_DIR / "earnings.json")
-BANNED_ACCOUNTS_FILE = str(DATA_DIR / "banned_accounts.json")
-LOG_FILE = str(DATA_DIR / "monitor.log")
+TZ = ZoneInfo('Asia/Tehran')
+PORT = int(os.environ.get('PORT', '8080'))
+STATUS_FILE = str(DATA_DIR / 'status.json')
+BANNED_ACCOUNTS_FILE = str(DATA_DIR / 'banned_accounts.json')
+FRESH_FOR = timedelta(minutes=10)
 
-PORT = int(os.environ.get("PORT", "8080"))
-if len(sys.argv) > 1:
-    try:
-        PORT = int(sys.argv[1])
-    except ValueError:
-        pass
 
-# marker appended to claimer.log when errors are cleared; the dashboard only
-# shows ERROR/WARNING lines that come AFTER this marker
-CLEAR_MARKER = "==== ERRS-CLEARED ===="
-
-# inline SVG taxi icon (no external resources needed)
-TAXI_SVG = """<svg class="taxi-svg" viewBox="0 0 64 40" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <rect x="2" y="20" width="60" height="15" rx="6" fill="{body}"/>
-  <path d="M10 20 L16 9 h24 l6 11 z" fill="{body2}"/>
-  <rect x="18" y="11" width="12" height="8" rx="1.6" fill="#cfe6ff"/>
-  <rect x="34" y="11" width="12" height="8" rx="1.6" fill="#cfe6ff"/>
-  <circle cx="16" cy="35" r="6.5" fill="#0d1424"/>
-  <circle cx="48" cy="35" r="6.5" fill="#0d1424"/>
-  <circle cx="16" cy="35" r="2.6" fill="#7c88a3"/>
-  <circle cx="48" cy="35" r="2.6" fill="#7c88a3"/>
-  <rect x="2" y="25" width="12" height="3.2" rx="1.6" fill="#ffd24f"/>
-</svg>"""
+def esc(value):
+    return html.escape(str(value), quote=True)
 
 
 def load_json(path, default):
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+        with open(path, encoding='utf-8') as stream:
+            return json.load(stream)
+    except (OSError, ValueError):
         return default
 
 
-def tail_lines(path, n=30):
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return f.readlines()[-n:]
-    except Exception:
-        return []
-
-
-def esc(s):
-    return html.escape(str(s))
-
-
-# --------------------------------------------------------------------------- #
-# Jalali (Persian solar) calendar conversion — for dashboard display
-# --------------------------------------------------------------------------- #
 PERSIAN_MONTHS = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
                   "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
 
@@ -127,7 +79,7 @@ def gregorian_to_jalali(y, m, d):
 
 def fmt_jalali(s):
     """Format a 'YYYY-MM-DD[ HH:MM:SS]' string as Jalali, e.g.
-    '2026-11-21 15:29:24' -> '28 آذر 1405، 15:29:24'."""
+    '2026-11-23 15:29:24' -> '2 آذر 1405، 15:29:24'."""
     s = (s or "").strip()
     if not s:
         return ""
@@ -144,443 +96,6 @@ def fmt_jalali(s):
     except (ValueError, IndexError):
         return s
 
-
-def explain(msg):
-    """Map a raw error message to (level, why) for human-readable display."""
-    if "session expired (401)" in msg or "re-logging in" in msg:
-        return "warning", "جلسه لاگین از جانب سرور منقضی شد — claimer لاگین مجدد خودکار انجام داد (رفع‌شده)"
-    if "FAILED" in msg:
-        return "error", "سرور پاسخ صحیحی به درخواست نداد — ممکن است موقتی باشد"
-    if "Connection reset" in msg or "reset by peer" in msg or "Connection aborted" in msg:
-        return "warning", "اتصال به سرور در میانه قطع شد — معمولاً به دلیل flakiness سرور یا rate limit؛ claimer attempt مجدد کرد"
-    if "429" in msg or "rate limited" in msg:
-        return "error", "سرور درخواست‌های زیاد را محدود کرد (rate limit)"
-    if "400" in msg:
-        return "warning", "سرور درخواست را رد کرد — معمولاً به دلیل اینکه در حال حاضر یک سفر دیگر در جریان است (یکی در زمان)"
-    if "401" in msg:
-        return "warning", "جلسه منقضی شد — لاگین مجدد انجام شد"
-    return "error", "خطای سرور — توضیح در پیام خطأ"
-
-
-def level_badge(level):
-    if level == "warning":
-        return "<span class='lvl lvl--warn'>⚠ خطای موقت / رفع‌شده</span>"
-    return "<span class='lvl lvl--err'>⛔ خطای اصلی</span>"
-
-
-def recent_errors_from_log():
-    """Extract recent ERROR/WARNING lines per account from claimer.log.
-    Only lines after the last ERRS-CLEARED marker are considered."""
-    per_account = {}
-    try:
-        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()[-400:]
-    except Exception:
-        return per_account
-    marker_idx = -1
-    for i, l in enumerate(lines):
-        if CLEAR_MARKER in l:
-            marker_idx = i
-    if marker_idx >= 0:
-        lines = lines[marker_idx + 1:]
-    pattern = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),?\d* \[(ERROR|WARNING)\] \[([^\]]+)\] (.+)$")
-    for line in reversed(lines):
-        m = pattern.search(line.strip())
-        if not m:
-            continue
-        ts, level, user, msg = m.groups()
-        if user not in per_account:
-            per_account[user] = []
-        if len(per_account[user]) >= 15:
-            break
-        lvl, why = explain(msg)
-        per_account[user].append({"t": ts, "e": msg, "why": why, "level": lvl})
-    return per_account
-
-
-def trips_bar(used, limit, bonus=0):
-    """Inline-styled progress bar for trips done / total (limit + bonus)."""
-    if not limit:
-        return ""
-    total = limit + (bonus or 0)
-    pct = max(0, min(100, round(used / total * 100))) if total else 0
-    cls = "trips-bar" + (" full" if pct >= 100 else "")
-    bonus_chip = (
-        f"<span class='chip chip--bonus'>🎁 {bonus} اکسترا</span>"
-        if bonus else ""
-    )
-    return (
-        f"<div class='trips'><div class='trips__txt'>سفرهای رفته: "
-        f"<b>{used}</b> از <b>{total}</b> {bonus_chip}</div>"
-        f"<div class='{cls}'><div class='trips__fill' style='width:{pct}%'></div></div></div>"
-    )
-
-
-def car_card(car):
-    status = car.get("status", "unavailable")
-    name = esc(car.get("name", "تاکسی"))
-    plate = esc(car.get("plate") or "")
-    icon_color = {"on_trip": "#2ecc71", "idle": "#4f8cff", "unavailable": "#8b97ad"}.get(status, "#8b97ad")
-    svg = TAXI_SVG.format(body=icon_color, body2="#2c3a55")
-    rented_badge = "<span class='pill pill--rent'>🔑 رنت</span>" if car.get("rented") else "<span class='pill pill--own'>مخصوص</span>"
-    status_pill = {
-        "on_trip": "<span class='pill pill--trip'>🟢 در سفر</span>",
-        "idle": "<span class='pill pill--ready'>🔵 آماده</span>",
-    }.get(status, "<span class='pill pill--off'>⚪ خارج از خدمت</span>")
-
-    if status == "on_trip":
-        ends_at = car.get("ends_at")
-        started_at = car.get("started_at", 0)
-        countdown = (
-            f"<div class='cd' data-ends=\"{int(ends_at)}\" data-started=\"{int(started_at)}\">"
-            f"<div class='cd__row'><span class='cd__label'>⏳ مونده تا پایان سفر</span>"
-            f"<b class='cd__val'>—</b></div>"
-            f"<div class='cd__track'><div class='cd__fill'></div></div></div>"
-            if ends_at else
-            "<div class='cd'><div class='cd__row'><span class='cd__label'>⏳ مونده تا پایان سفر</span><b>—</b></div></div>"
-        )
-    else:
-        countdown = (
-            "<div class='cd cd--idle'><div class='cd__row'><span class='cd__label'>⏸ آمادهٔ حرکت — استارت خودکار غیرفعال است</span></div></div>"
-            if status == "idle" else
-            f"<div class='cd cd--idle'><div class='cd__row'><span class='cd__label'>⏳ {esc(car.get('block_msg') or 'در انتظار اجازهٔ استارت / خارج از خدمت')}</span></div></div>"
-        )
-
-    return f"""
-      <div class="car-card car-card--{esc(status)}">
-        <div class="car-card__top">{svg}
-          <div class="car-card__name-wrap"><span class="car-card__name">{name}</span>{rented_badge}{status_pill}</div>
-        </div>
-        <div class="car-card__plate">{plate or '—'}</div>
-        {trips_bar(car.get("used", 0), car.get("limit", 0), car.get("bonus", 0))}
-        {countdown}
-      </div>"""
-
-
-# --------------------------------------------------------------------------- #
-# Mission Center (missions + achievements, from /api/missions)
-# --------------------------------------------------------------------------- #
-MISSION_DEFS = {
-    "d_trips10": ("🚕 ۱۰ سفر انجام بده", "هر روز ۱۰ سفر با تاکسی‌ها انجام بده"),
-    "d_rented10": ("🚕 ۱۰ سفر با تاکسی رنت", "۱۰ سفر با تاکسی‌های اجاره‌شده انجام بده"),
-    "d_deposit5": ("💰 ۵ USDT واریز کن", "در روز ۵ USDT واریز شود"),
-    "d_deposit50": ("💰 ۵۰ USDT واریز کن", "در روز ۵۰ USDT واریز شود"),
-    "a_buy1": ("🚗 خرید اولین تاکسی", ""),
-    "a_buy5": ("🚗 خرید ۵ تاکسی", ""),
-    "a_buy10": ("🚗 خرید ۱۰ تاکسی", ""),
-    "a_buy25": ("🚗 خرید ۲۵ تاکسی", ""),
-    "a_trips300": ("🛣 ۳۰۰ سفر کل", ""),
-    "a_trips800": ("🛣 ۸۰۰ سفر کل", ""),
-    "a_trips1500": ("🛣 ۱۵۰۰ سفر کل", ""),
-    "a_rented300": ("🚕 ۳۰۰ سفر رنت کل", ""),
-    "a_rented500": ("🚕 ۵۰۰ سفر رنت کل", ""),
-    "a_rented1500": ("🚕 ۱۵۰۰ سفر رنت کل", ""),
-    "a_guild": ("🛡 عضویت در گیلدم", ""),
-    "a_rentout3": ("🔑 اجاره‌دادن ۳ تاکسی", ""),
-    "a_rentout5": ("🔑 اجاره‌دادن ۵ تاکسی", ""),
-    "a_refs10": ("👥 ۱۰ رفررال تایید‌شده", ""),
-    "a_refs30": ("👥 ۳۰ رفررال تایید‌شده", ""),
-    "a_refs100": ("👥 ۱۰۰ رفررال تایید‌شده", ""),
-    "a_refbuy5": ("🚗 ۵ رفررال که تاکسی خریدند", ""),
-    "a_refbuy10": ("🚗 ۱۰ رفررال که تاکسی خریدند", ""),
-    "a_refbuy30": ("🚗 ۳۰ رفررال که تاکسی خریدند", ""),
-    "a_refbuy100": ("🚗 ۱۰۰ رفررال که تاکسی خریدند", ""),
-    "a_video": ("🎬 ویدیو بکش و بفرست", "ویدیو از بازی در یوتیوب با حداقل ۵۰ بازدید"),
-    "a_tg_channel": ("📲 به کانال تلگرام بپیوندی", ""),
-}
-
-
-def reward_chip(reward):
-    if not reward:
-        return "<span class='chip chip--none'>بدون جایزه</span>"
-    cur = reward.get("cur", "")
-    amt = reward.get("amount", 0)
-    if cur == "usdt":
-        return f"<span class='chip chip--usdt'>💰 {amt} USDT</span>"
-    if cur == "efectivo":
-        return f"<span class='chip chip--cash'>💵 {amt} Efectivo</span>"
-    return f"<span class='chip'>{esc(cur)} {amt}</span>"
-
-
-def mission_row(m):
-    mid = m.get("id", "?")
-    title, desc = MISSION_DEFS.get(mid, (mid, ""))
-    kind = m.get("kind")
-    manual = kind in ("video", "telegram")
-    value = m.get("value", 0)
-    goal = m.get("goal", 0)
-    done = m.get("done", False)
-    claimed = m.get("claimed", False)
-    pct = max(0, min(100, round(value / goal * 100))) if goal else 0
-    if claimed:
-        status = "<span class='mstatus mstatus--claimed'>✅ کلیم شد</span>"
-        cls = "mission--claimed"
-    elif done and m.get("reward") and not claimed:
-        status = "<span class='mstatus mstatus--claim'>🎁 قابل کلیم</span>"
-        cls = "mission--claimable"
-    elif done:
-        status = "<span class='mstatus mstatus--done'>✅ تمومش شد</span>"
-        cls = "mission--done"
-    else:
-        status = f"<span class='mstatus'>{pct}%</span>"
-        cls = "mission--progress"
-    note = "<div class='mission__note'>🔧 دستی — باید خودت انجام بدی (auto-claim ندارد)</div>" if manual else ""
-    return f"""
-      <div class="mission {cls}">
-        <div class="mission__top">
-          <div class="mission__title">{esc(title)}</div>
-          {status}
-        </div>
-        {note}
-        <div class="mission__reward">{reward_chip(m.get("reward"))}</div>
-        <div class="mission__bar"><div class="mission__fill" style="width:{pct}%"></div></div>
-        <div class="mission__progress">{value} از {goal}</div>
-      </div>"""
-
-
-def mission_center(missions, user=""):
-    if not missions:
-        return ""
-    daily = missions.get("daily", [])
-    ach = missions.get("achievements", [])
-    all_m = daily + ach
-    claimable = sum(1 for m in all_m
-                    if m.get("done") and not m.get("claimed") and m.get("reward")
-                    and m.get("kind") not in ("video", "telegram"))
-    claimed = sum(1 for m in all_m if m.get("claimed"))
-    resets_at = missions.get("resetsAt", 0)
-    reset_txt = fmt_jalali(datetime.fromtimestamp(resets_at / 1000, tz=TZ).strftime("%Y-%m-%d %H:%M:%S")) if resets_at else "—"
-    daily_html = "".join(mission_row(m) for m in daily)
-    ach_html = "".join(mission_row(m) for m in ach)
-    # collapsible: default closed to keep the dashboard compact.
-    # state persists across the 30s auto-refresh via localStorage.
-    safe_key = "".join(ch if ch.isalnum() else "_" for ch in (user or "acc"))
-    return f"""
-      <div class="mission-sec" id="mc-{safe_key}">
-        <div class="mission-sec__head mission-sec__head--toggle" role="button" tabindex="0">
-          <span class="mc-toggle">🔽</span>
-          <span>🏆 Mission Center</span>
-          <span class="mission-sec__count">{claimable} قابل کلیم</span>
-          <span class="mission-sec__claimed">· {claimed} کلیم‌شده</span>
-        </div>
-        <div class="mission-sec__body">
-          <div class="mission-sec__sub">Missiones روزانه reset می‌شود در: <b>{esc(reset_txt)}</b></div>
-          <div class="mission-sec__group">📅 missionهای روزانه</div>
-          <div class="mission-list">{daily_html}</div>
-          <div class="mission-sec__group">🏆 دستاوردها</div>
-          <div class="mission-list">{ach_html}</div>
-        </div>
-      </div>"""
-
-
-def referral_center(referrals, user=""):
-    if not referrals:
-        return ""
-    pending = referrals.get("pending") or {}
-    pending_trips = pending.get("trips", 0) or 0
-    stats = referrals.get("stats", {})
-    reward_car = referrals.get("rewardCar") or {}
-    bonuses = referrals.get("bonuses", [])
-    deposit_pct = referrals.get("depositPct", 0)
-    ref_code = referrals.get("refCode", "")
-    names = pending.get("names", [])
-    safe_key = "".join(ch if ch.isalnum() else "_" for ch in (user or "acc"))
-    claimable = pending_trips > 0
-    if claimable:
-        status_txt = f"<span class='mc-toggle'>🎁 {pending_trips} سفر قابل کلیم</span>"
-    elif pending_trips == 0:
-        status_txt = "<span class='mstatus mstatus--claimed'>✅ هیچ سفر pendingی نیست</span>"
-    else:
-        status_txt = "<span class='mstatus'>—</span>"
-    # bonus trips already in cars (bonuses list)
-    bonus_left = sum(b.get("left", 0) for b in bonuses)
-    car_name = reward_car.get("name", "—")
-    return f"""
-      <div class="mission-sec" id="rf-{safe_key}">
-        <div class="mission-sec__head mission-sec__head--toggle" role="button" tabindex="0">
-          <span class="mc-toggle">🔽</span>
-          <span>👥 Referral Center</span>
-          {status_txt}
-        </div>
-        <div class="mission-sec__body">
-          <div class="mission-sec__sub">کد رفرال: <b>{esc(ref_code) or '—'}</b> · از هر واریز رفرال {deposit_pct}% 💰</div>
-          <div class="mission-sec__group">📊 تفلید رفرال</div>
-          <div class="mission-list">
-            <div class="mission mission--progress">
-              <div class="mission__top">
-                <div class="mission__title">👥 {stats.get('total', 0)} رفرال</div>
-                <span class="mstatus">{stats.get('completed', 0)} کامل · {stats.get('inProgress', 0)} در حال</span>
-              </div>
-              <div class="mission__reward"><span class="chip">🏆 {stats.get('tripsEarned', 0)} سفر اکراست دریافت</span></div>
-            </div>
-            <div class="mission mission--progress">
-              <div class="mission__top">
-                <div class="mission__title">🚕 تاکسی دریافت bonus</div>
-                <span class="mstatus">{esc(car_name)}</span>
-              </div>
-              <div class="mission__reward"><span class="chip chip--usdt">🎁 {bonus_left} سفر اکراست باقی</span></div>
-            </div>
-          </div>
-          {('<div class="mission__note">🔑 سفرهای pending به طور خودکار کلیم می‌شود و به تاکسی اصلی اضافه می‌شود.</div>' if claimable else '')}
-        </div>
-      </div>"""
-
-
-def revenue_section(earnings):
-    """Revenue Tracker section: today / week / month / all-time USDT + trips."""
-    daily = earnings.get("daily", {})
-    weekly = earnings.get("weekly", {})
-    monthly = earnings.get("monthly", {})
-    all_time = earnings.get("all_time", {})
-    today = time.strftime("%Y-%m-%d")
-    week_key = time.strftime("%Y-W%W")
-    month_key = time.strftime("%Y-%m")
-
-    today_data = daily.get(today, {})
-    week_data = weekly.get(week_key, {})
-    month_data = monthly.get(month_key, {})
-
-    # Calculate week total from daily data
-    week_days = week_data.get("days", {})
-    week_usdt = sum(d.get("usdt", 0) for d in week_days.values())
-    week_trips = sum(d.get("trips", 0) for d in week_days.values())
-    month_usdt = month_data.get("usdt", 0) or 0.0
-    month_trips = month_data.get("trips", 0) or 0
-
-    # Build daily chart (last 7 days)
-    days_data = []
-    for i in range(6, -1, -1):
-        d = time.strftime("%Y-%m-%d", time.gmtime(time.time() - i * 86400))
-        dd = daily.get(d, {})
-        days_data.append({"date": fmt_jalali(d), "usdt": dd.get("usdt", 0), "trips": dd.get("trips", 0)})
-    max_usdt = max(d.get("usdt", 0) for d in days_data) or 0.001
-
-    chart_bars = "".join(
-        f"<div class='rev-bar-wrap'>"
-        f"<div class='rev-bar-label'>{esc(d['date'][:2])}</div>"
-        f"<div class='rev-bar-track'>"
-        f"<div class='rev-bar-fill' style='height:{max(4,round(d['usdt']/max_usdt*100))}%'></div>"
-        f"</div>"
-        f"<div class='rev-bar-val'>{d['usdt']:.4f}</div>"
-        f"</div>"
-        for d in days_data
-    )
-
-    # Per-account breakdown today
-    acc_breakdown = today_data.get("accounts", {})
-    acc_rows = ""
-    if acc_breakdown:
-        for user, ad in sorted(acc_breakdown.items(), key=lambda x: x[1].get("usdt", 0), reverse=True):
-            acc_rows += (
-                f"<tr>"
-                f"<td>{esc(user[:12] + '…' if len(user) > 12 else user)}</td>"
-                f"<td class='num'>{ad.get('usdt', 0):.4f}</td>"
-                f"<td class='num'>{ad.get('trips', 0)}</td>"
-                f"</tr>"
-            )
-    acc_table = (
-        f"<table class='rev-table'><thead><tr><th>اکانت</th><th>USDT</th><th>سفرها</th></tr></thead><tbody>{acc_rows}</tbody></table>"
-        if acc_rows else "<div class='rev-no'>هنوز داده‌ای نیست</div>"
-    )
-
-    return f""""
-  <div class="mission-sec" id="rv">
-    <div class="mission-sec__head mission-sec__head--toggle" role="button" tabindex="0">
-      <span class="mc-toggle">🔽</span>
-      <span>📊 Revenue Tracker</span>
-      <span class="rev__updated">آپدیت: {esc(all_time.get('updated', '—'))}</span>
-    </div>
-    <div class="mission-sec__body">
-    <section class="rev">
-    <div class="rev__grid">
-      <div class="rev__cards">
-        <div class="rev__card rev__card--today">
-          <div class="rev__card-label">💰 امروز</div>
-          <div class="rev__card-val">{today_data.get('usdt', 0):.4f} <small>USDT</small></div>
-          <div class="rev__card-sub">{today_data.get('trips', 0)} سفر</div>
-        </div>
-        <div class="rev__card rev__card--week">
-          <div class="rev__card-label">📅 این هفته</div>
-          <div class="rev__card-val">{week_usdt:.4f} <small>USDT</small></div>
-          <div class="rev__card-sub">{week_trips} سفر · {len(week_days)} روز</div>
-        </div>
-        <div class="rev__card rev__card--month">
-          <div class="rev__card-label">🗓 این ماه</div>
-          <div class="rev__card-val">{month_usdt:.4f} <small>USDT</small></div>
-          <div class="rev__card-sub">{month_data.get('trips', 0)} سفر</div>
-        </div>
-        <div class="rev__card rev__card--all">
-          <div class="rev__card-label">🏆 کل درآمد</div>
-          <div class="rev__card-val">{all_time.get('total_usdt', 0):.4f} <small>USDT</small></div>
-          <div class="rev__card-sub">{all_time.get('total_trips', 0)} سفر کل</div>
-        </div>
-      </div>
-      <div class="rev__chart">
-        <div class="rev__chart-label">📈 نمودار ۷ روز اخیر (USDT)</div>
-        <div class="rev-bars">{chart_bars}</div>
-      </div>
-      <div class="rev__detail">
-        <div class="rev__detail-label">📋 جزئیات امروز (هر اکانت)</div>
-        {acc_table}
-      </div>
-    </div>
-    </section>
-    </div>"""
-
-
-def account_features(a):
-    """Wallet / bonus trips / lifetime stats / today's earnings / daily average."""
-    w = a.get("wallet", {}) or {}
-    bonus = a.get("bonus_trips", 0)
-    st = a.get("stats", {}) or {}
-    usdt = w.get("usdt", 0)
-    cash = w.get("cash", 0)
-    trips = st.get("trips", 0)
-    earned = st.get("usdt_earned", 0)
-    # today's earnings and daily-average from history
-    earned_today = a.get("earnings_today", 0) or 0
-    hist = a.get("earnings_history", []) or []
-    if hist:
-        total_hist = sum(h.get("earned", 0) for h in hist)
-        avg_daily = total_hist / len(hist)
-    else:
-        total_hist = 0.0
-        avg_daily = 0.0
-    # show at least today's earning if no history yet
-    if not hist:
-        avg_daily = earned_today
-    return f"""
-      <div class="acc__feats">
-        <div class="feat feat--gold"><span>💰 USDT</span><b>{usdt}</b></div>
-        <div class="feat feat--green"><span>💵 Cash</span><b>{cash}</b></div>
-        <div class="feat feat--blue"><span>🎁 bonus trips</span><b>{bonus}</b></div>
-        <div class="feat"><span>📊 سفرهای کل</span><b>{trips}</b></div>
-        <div class="feat"><span>📈 درآمد USDT</span><b>{earned}</b></div>
-        <div class="feat feat--earn"><span>⚡ درآمد امروز</span><b>{earned_today}</b></div>
-        <div class="feat feat--avg"><span>📅 میانگین روزی</span><b>{avg_daily}</b></div>
-      </div>"""
-
-
-def creator_status_info():
-    return {"enabled": False, "running": False, "done": False,
-            "current": len(active_accounts_info()), "next_cycle_ts": None,
-            "message": "ساخت اکانت حذف شده است؛ عملیات خودکار غیرفعال است"}
-
-
-def creator_status_section(info):
-    current = esc(str(info.get("current", 0)))
-    return f"""<details id="accountCreatorPanel" class="creator-status status-panel" data-status-panel>
-    <summary class="creator-status__head status-panel__summary">
-      <span class="creator-status__icon" aria-hidden="true">🏭</span>
-      <span class="creator-status__title">ساخت خودکار اکانت‌ها</span>
-      <span class="creator-status__badge creator-status__badge--idle">⛔ غیرفعال</span>
-      <span class="status-panel__chevron" aria-hidden="true">⌄</span>
-    </summary>
-    <div class="status-panel__body">
-      <div class="creator-stat creator-stat--blue"><small>تعداد اکانت‌های موجود</small><b>{current}</b></div>
-      <p>ساخت اکانت و ریفرال جعلی حذف شده است. استارت، اجاره و دریافت جایزهٔ خودکار غیرفعال است.</p>
-    </div>
-    </details>"""
 
 
 def banned_accounts_info():
@@ -646,752 +161,253 @@ def active_accounts_info():
     return [] if user in banned else [{"username": user}]
 
 
+def finite_number(value):
+    try:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def dashboard_view(status=None, now=None):
+    """Separate configured identity, monitoring opt-in and received data.
+
+    A recent sample is evidence of a receive, NOT proof a worker is running now.
+    Timestamp comes only from that primary account's successful persisted sample.
+    """
+    status = load_json(STATUS_FILE, {}) if status is None else status
+    status = status if isinstance(status, dict) else {}
+    now = now or datetime.now(TZ)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=TZ)
+    user = primary_username()
+    enabled = monitoring_enabled()
+    suspended = any(row['username'] == user and row['confirmed'] for row in banned_accounts_info())
+    account = status.get(user) if user else None
+    received = None
+    sample = None
+    if isinstance(account, dict) and account.get('last_result') == 'OK' and not suspended and not account.get('banned'):
+        try:
+            received = datetime.strptime(account.get('last_run', ''), '%Y-%m-%d %H:%M:%S').replace(tzinfo=TZ)
+            cars = account.get('cars')
+            if received > now + timedelta(seconds=30) or not isinstance(cars, list) or any(not isinstance(car, dict) or car.get('status') not in ('on_trip', 'idle', 'unavailable') for car in cars):
+                raise ValueError('Invalid sample')
+            sample = account
+        except (TypeError, ValueError):
+            received = None
+    stale = received is not None and now - received > FRESH_FOR
+    complete_config = bool(os.environ.get('PRIMARY_ACCOUNT_PASSWORD') and os.environ.get('MONITOR_LOCK_DATABASE_URL'))
+    if suspended:
+        label, tone, note = 'متوقف: تعلیق ثبت‌شده', 'danger', 'تعلیق صریح برای اکانت اصلی ثبت شده است.'
+    elif not enabled:
+        label, tone, note = 'پایش خاموش', 'neutral', 'هیچ درخواستی از داشبورد به سایت ارسال نمی‌شود.'
+    elif not user:
+        label, tone, note = 'در انتظار تنظیم اکانت', 'warning', 'نام اکانت اصلی هنوز مشخص نشده است.'
+    elif not complete_config:
+        label, tone, note = 'پیکربندی پایش ناقص', 'warning', 'تنظیمات لازم برای پایش کامل نیست؛ فعال‌بودن آن تأیید نمی‌شود.'
+    elif received is None:
+        label, tone, note = 'در انتظار اولین دریافت', 'warning', 'هنوز دریافت موفقی برای اکانت اصلی ثبت نشده است.'
+    elif stale:
+        label, tone, note = 'اطلاعات قدیمی', 'warning', 'بیش از ۱۰ دقیقه از آخرین دریافت موفق گذشته است.'
+    else:
+        label, tone, note = 'آخرین دریافت تازه است', 'success', 'این وضعیت تازگی داده را نشان می‌دهد، نه تضمین اجرای فعلی پایش.'
+    if not enabled:
+        empty_note = 'پایش خارجی خاموش است؛ هیچ عملیات خودکاری انجام نمی‌شود.'
+    elif suspended:
+        empty_note = 'پایش این اکانت متوقف است؛ سابقهٔ تعلیق را در پایین صفحه ببینید.'
+    else:
+        empty_note = 'دریافت موفقی ثبت نشده است؛ هیچ عملیات استارت، اجاره یا دریافت جایزه انجام نمی‌شود.'
+    return {'user': user, 'enabled': enabled, 'suspended': suspended, 'sample': sample,
+            'received': received, 'stale': stale, 'label': label, 'tone': tone, 'note': note,
+            'empty_note': empty_note}
+
+
+def status_section(view):
+    account_label = 'تعلیق‌شده' if view['suspended'] else ('تنظیم‌شده' if view['user'] else 'تنظیم نشده')
+    account_note = esc(view['user']) if view['user'] else 'اکانت اصلی را با PRIMARY_ACCOUNT مشخص کنید؛ این کار پایش را روشن نمی‌کند.'
+    received = fmt_jalali(view['received'].strftime('%Y-%m-%d %H:%M:%S')) if view['received'] else 'هنوز دریافت نشده'
+    return f'''<section class="overview" aria-label="وضعیت داشبورد">
+      <article class="overview-card"><span class="eyebrow">وضعیت پایش</span>
+        <strong class="status-text {view['tone']}">{esc(view['label'])}</strong><p>{esc(view['note'])}</p></article>
+      <article class="overview-card"><span class="eyebrow">اکانت اصلی</span>
+        <strong>{account_label}</strong><p dir="auto">{account_note}</p></article>
+      <article class="overview-card"><span class="eyebrow">آخرین دریافت موفق</span>
+        <strong class="received-at">{esc(received)}</strong><p>به وقت تهران · زمان دریافت اطلاعات، نه زمان بازشدن صفحه</p></article>
+    </section>'''
+
+
+def car_card(car):
+    status = car.get('status', 'unavailable')
+    name = esc(car.get('name') or 'تاکسی بدون نام')
+    plate = esc(car.get('plate') or 'پلاک ثبت نشده')
+    ownership = 'اجاره‌ای' if car.get('rented') else 'شخصی'
+    label = {'on_trip': 'در سفر (طبق آخرین دریافت)', 'idle': 'آمادهٔ حرکت'}.get(status, 'در دسترس نیست')
+    ends_at = car.get('ends_at')
+    if status == 'on_trip' and finite_number(ends_at) and ends_at > 0:
+        detail = f'<p class="trip-timer" data-ends="{int(ends_at)}">زمان باقی‌مانده بر اساس اطلاعات ثبت‌شده</p>'
+    elif status == 'idle':
+        detail = '<p>استارت خودکار غیرفعال است.</p>'
+    else:
+        detail = f'<p>{esc(car.get("block_msg") or "جزئیات بیشتری از محدودیت ثبت نشده است.")}</p>'
+    quota = ''
+    if finite_number(car.get('limit')) and car['limit'] > 0 and finite_number(car.get('used')):
+        quota = f'<p class="muted">سهمیهٔ مصرف‌شده: {esc(car["used"])} از {esc(car["limit"])}</p>'
+    return f'''<article class="taxi-card"><div class="taxi-heading"><span aria-hidden="true">🚕</span>
+      <h3>{name}</h3><span class="tag">{ownership}</span></div><p class="plate" dir="auto">{plate}</p>
+      <span class="taxi-state">{label}</span>{detail}{quota}</article>'''
+
+
+def account_data_section(view):
+    if view['sample'] is None:
+        return f'''<section id="emptyState" class="empty-state" aria-labelledby="emptyTitle">
+          <span class="empty-icon" aria-hidden="true">⏸</span><h2 id="emptyTitle">هنوز اطلاعاتی از اکانت دریافت نشده است.</h2>
+          <p>{esc(view['empty_note'])}</p></section>'''
+    sample = view['sample']
+    cars = sample['cars']
+    wallet = sample.get('wallet') if isinstance(sample.get('wallet'), dict) else {}
+    balance = wallet.get('usdt')
+    balance_html = f'{balance:,.4f}' if finite_number(balance) and balance >= 0 else '—'
+    note = 'این اطلاعات قدیمی است و وضعیت فعلی سایت را تأیید نمی‌کند.' if view['stale'] else 'اطلاعات بر اساس آخرین دریافت موفق است؛ هیچ عملیات خودکاری انجام نمی‌شود.'
+    if not view['enabled']:
+        note = 'اطلاعات ذخیره‌شده نمایش داده می‌شود؛ پایش خارجی خاموش است. ' + note
+    cards = ''.join(car_card(car) for car in cars) or '<p class="empty-inline">در آخرین دریافت، تاکسی‌ای برای این اکانت ثبت نشده است.</p>'
+    return f'''<section id="accountData" aria-labelledby="dataTitle">
+      <div class="section-heading"><h2 id="dataTitle">اطلاعات اکانت اصلی</h2><span class="tag">فقط‌خواندنی</span></div>
+      <p class="data-note">{note}</p><div class="metrics">
+        <article class="metric"><span>موجودی USDT</span><strong dir="ltr">{balance_html}</strong></article>
+        <article class="metric"><span>تاکسی‌های ثبت‌شده</span><strong>{len(cars)}</strong></article>
+        <article class="metric"><span>در حال سفر</span><strong>{sum(car.get('status') == 'on_trip' for car in cars)}</strong></article>
+        <article class="metric"><span>آمادهٔ حرکت</span><strong>{sum(car.get('status') == 'idle' for car in cars)}</strong></article>
+      </div><div class="taxi-grid">{cards}</div></section>'''
+
+
+def disclosure(panel_id, title, badge, body, icon):
+    return f'''<details id="{panel_id}" class="history-panel" data-status-panel>
+      <summary><span class="panel-icon" aria-hidden="true">{icon}</span><span class="panel-title">{title}</span>
+        <span class="tag">{badge}</span><span class="chevron" aria-hidden="true">⌄</span></summary>
+      <div class="panel-body">{body}</div></details>'''
+
+
 def banned_accounts_section():
-    """Show recorded bans without changing accounts or triggering requests."""
     records = banned_accounts_info()
-    confirmed_count = sum(record["confirmed"] for record in records)
+    confirmed = sum(row['confirmed'] for row in records)
     rows = []
     for record in records:
-        user = esc(record["username"])
-        reason = esc(record["reason"] or "دلیل ثبت نشده")
-        detected_at = esc(record["detected_at"] or "زمان ثبت نشده")
-        label = "🚫 بن‌شده" if record["confirmed"] else "⚠️ تأییدنشده (سابقهٔ قدیمی)"
-        rows.append(f"""
-          <tr>
-            <td style="padding:12px;overflow-wrap:anywhere">{user}</td>
-            <td style="padding:12px;color:var(--red);white-space:nowrap">{label}</td>
-            <td style="padding:12px;color:var(--muted);min-width:180px;overflow-wrap:anywhere">{reason}</td>
-            <td style="padding:12px;white-space:nowrap"><span dir="ltr">{detected_at}</span></td>
-          </tr>""")
-    rows_html = "".join(rows) if rows else """
-          <tr><td colspan="4" style="padding:24px;text-align:center;color:var(--muted)">
-            هیچ اکانت بن‌شده‌ای ثبت نشده است.
-          </td></tr>"""
+        label = 'تعلیق تأییدشده' if record['confirmed'] else 'تأییدنشده (سابقهٔ قدیمی)'
+        rows.append(f'''<tr><td dir="auto">{esc(record['username'])}</td><td>{label}</td>
+          <td>{esc(record['reason'] or 'دلیل ثبت نشده')}</td><td>{esc(fmt_jalali(record['detected_at']) or 'زمان ثبت نشده')}</td></tr>''')
+    body = ('''<p class="muted">سوابق تأییدنشده به‌تنهایی اثبات تعلیق اکانت نیستند.</p>
+      <div class="table-scroll"><table><thead><tr><th scope="col">اکانت</th><th scope="col">وضعیت</th>
+      <th scope="col">دلیل ثبت‌شده</th><th scope="col">زمان تشخیص (تهران)</th></tr></thead>
+      <tbody>''' + ''.join(rows) + '</tbody></table></div>') if rows else '<p class="empty-inline">هیچ سابقهٔ تعلیقی ثبت نشده است.</p>'
+    badge = f'{confirmed} اکانت بن‌شده' if records else 'بدون سابقه'
+    return disclosure('bannedAccountsPanel', 'سابقهٔ تعلیق اکانت‌ها', badge, body, '🚫')
 
-    return f"""
-  <details id="bannedAccountsPanel" class="banned-status creator-status status-panel" data-status-panel>
-    <summary class="creator-status__head status-panel__summary">
-      <span class="creator-status__icon" aria-hidden="true">🚫</span>
-      <span class="creator-status__title">اکانت‌های بن‌شده</span>
-      <span class="creator-status__badge" style="color:var(--red);border:1px solid currentColor">
-        {confirmed_count} اکانت بن‌شده
-      </span>
-      <span class="status-panel__chevron" aria-hidden="true">⌄</span>
-    </summary>
-    <div class="status-panel__body">
-    <p style="color:var(--muted);font-size:13px;line-height:1.9;margin:0 0 16px">
-      بن‌های ثبت‌شده توسط سیستم، شامل اکانت‌های حذف‌شده از فهرست پردازش.
-      فقط پیام صریح تعلیق مبنای حذف است؛ سوابق قدیمیِ تأییدنشده باعث حذف اکانت نمی‌شوند.
-    </p>
-    <div style="border:1px solid var(--border);border-radius:10px;overflow:auto;max-height:320px">
-      <table style="width:100%;border-collapse:collapse;font-size:12.5px;text-align:right">
-        <thead style="background:var(--card2);position:sticky;top:0">
-          <tr>
-            <th scope="col" style="padding:12px">اکانت</th>
-            <th scope="col" style="padding:12px">وضعیت</th>
-            <th scope="col" style="padding:12px">دلیل ثبت‌شده</th>
-            <th scope="col" style="padding:12px">زمان تشخیص (تهران)</th>
-          </tr>
-        </thead>
-        <tbody>{rows_html}</tbody>
-      </table>
-    </div>
-    </div>
-  </details>"""
+
+def event_lines():
+    """Local persisted evidence only; runtime output lives in Railway logs.
+
+    There is no monitor.log writer. Do not invent a log source or infer worker
+    starts/stops from configuration, file mtimes or page refreshes.
+    """
+    events = []
+    view = dashboard_view()
+    if view['received']:
+        timestamp = view['received'].strftime('%Y-%m-%d %H:%M:%S')
+        events.append((timestamp, f'{fmt_jalali(timestamp)} · آخرین دریافت موفق اطلاعات اکانت اصلی'))
+    for record in banned_accounts_info():
+        if record['confirmed']:
+            timestamp = record['detected_at']
+            events.append((timestamp, f'{fmt_jalali(timestamp) or "زمان ثبت نشده"} · تعلیق ثبت‌شده: {record["username"]}'))
+    secrets = [os.environ.get(key) for key in ('PRIMARY_ACCOUNT_PASSWORD', 'DASHBOARD_PASSWORD', 'MONITOR_LOCK_DATABASE_URL')]
+    result = []
+    for _, line in sorted(events, key=lambda event: event[0], reverse=True)[:30]:
+        for secret in secrets:
+            if secret:
+                line = line.replace(secret, '[REDACTED]')
+        result.append(line[:1000])
+    return result
+
+
+def events_section():
+    lines = event_lines()
+    body = '<div class="event-list">' + ''.join(f'<p dir="auto">{esc(line)}</p>' for line in lines) + '</div>' if lines else '<p class="empty-inline">رویدادی برای نمایش وجود ندارد.</p>'
+    body += '<p class="muted">بر اساس اطلاعات ذخیره‌شدهٔ محلی؛ گزارش اجرای سرویس در لاگ‌های Railway است.</p>'
+    return disclosure('eventsPanel', 'رویدادها', f'{len(lines)} رویداد ثبت‌شده' if lines else 'بدون رویداد', body, '📋')
+
+
+PAGE_CSS = '''
+:root{color-scheme:dark;--bg:#080f1d;--card:#101b2d;--line:#223149;--text:#e5edf8;--muted:#9aaac0;--gold:#f7c85a;--blue:#83b9ff;--green:#6ed4aa;--red:#ffa5ab}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top right,#152342 0,transparent 55%),var(--bg);color:var(--text);font-family:Tahoma,Arial,sans-serif;line-height:1.85;min-height:100vh}
+.wrap{width:min(1180px,calc(100% - 40px));margin:auto}header{border-bottom:1px solid var(--line);padding:30px 0 24px}.header-row{display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{display:flex;align-items:center;gap:14px}.brand-icon{font-size:32px;background:#263023;border:1px solid #786332;border-radius:16px;padding:5px 13px}h1{font-size:23px;margin:0;line-height:1.5}header p{color:var(--muted);margin:4px 0 0;font-size:13px}.safe-badge,.tag{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;white-space:nowrap}.safe-badge{color:var(--gold);border-color:#6c572d;background:#302919}
+main{padding:28px 0 10px}.overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:26px}.overview-card{background:linear-gradient(140deg,#142137,var(--card));border:1px solid var(--line);border-radius:18px;padding:22px;min-width:0}.eyebrow{display:block;color:var(--muted);font-size:12px;margin-bottom:10px}.overview-card strong{display:block;font-size:19px;font-weight:600}.overview-card p{font-size:12px;color:var(--muted);margin:10px 0 0;overflow-wrap:anywhere}.overview-card .received-at{font-size:16px;font-variant-numeric:tabular-nums}.neutral{color:var(--muted)}.warning{color:var(--gold)}.danger{color:var(--red)}.success{color:var(--green)}
+.empty-state{border:1px dashed #3b4c66;border-radius:22px;text-align:center;padding:52px 24px;background:#0f192b;margin-bottom:28px}.empty-icon{display:inline-flex;align-items:center;justify-content:center;width:64px;height:64px;border-radius:20px;background:#23314a;color:var(--gold);font-size:30px}.empty-state h2{font-size:20px;margin:20px 0 10px}.empty-state p{color:var(--muted);font-size:14px;margin:0}.section-heading{display:flex;align-items:center;gap:14px;margin-top:4px}.section-heading h2{font-size:19px;margin:0}.data-note{color:var(--muted);font-size:13px;margin:10px 0 18px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.metric{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:19px}.metric span{font-size:12px;color:var(--muted);display:block}.metric strong{display:block;font-size:26px;color:var(--gold);margin-top:8px;font-variant-numeric:tabular-nums}
+.taxi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:16px;margin:18px 0 28px}.taxi-card{border:1px solid var(--line);border-radius:17px;background:#0e192b;padding:20px;min-width:0}.taxi-heading{display:flex;gap:9px;align-items:center}.taxi-heading h3{font-size:15px;flex:1;margin:0;overflow-wrap:anywhere}.taxi-heading>span:first-child{font-size:23px}.plate{color:var(--muted);font-size:12px}.taxi-state{font-size:12px;color:var(--blue)}.taxi-card p{font-size:12px;color:var(--muted)}.taxi-card .trip-timer{color:var(--gold);font-variant-numeric:tabular-nums}
+.history{display:grid;gap:14px;margin-top:28px}.history-panel{border:1px solid var(--line);border-radius:17px;background:#0e192a;overflow:hidden}.history-panel summary{display:flex;align-items:center;gap:12px;padding:18px 22px;cursor:pointer;list-style:none;user-select:none;min-height:66px}.history-panel summary::-webkit-details-marker{display:none}.history-panel summary:hover{background:#152239}.history-panel summary:focus-visible{outline:2px solid var(--blue);outline-offset:-4px;border-radius:16px}.panel-icon{font-size:21px}.panel-title{font-size:15px;flex:1}.chevron{font-size:23px;color:var(--muted);transition:transform .15s}.history-panel[open] .chevron{transform:rotate(180deg)}.panel-body{padding:0 22px 22px;font-size:13px}.muted,.empty-inline{color:var(--muted)}.empty-inline{font-size:13px;margin:0;padding:8px 0}.table-scroll{overflow:auto;max-height:340px}table{border-collapse:collapse;width:100%;text-align:right;font-size:12px}th{color:var(--muted);position:sticky;top:0;background:#101d31}td,th{padding:12px;border-bottom:1px solid var(--line);min-width:100px}td{overflow-wrap:anywhere}.event-list{max-height:320px;overflow:auto;font-family:monospace}.event-list p{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:8px;border-bottom:1px solid var(--line)}footer{text-align:center;padding:25px 0 30px;color:var(--muted);font-size:11px}
+@media(max-width:850px){.overview{grid-template-columns:1fr}.overview-card{padding:18px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.overview-card strong{font-size:17px}}@media(max-width:480px){.wrap{width:calc(100% - 28px)}.header-row{align-items:flex-start;flex-direction:column;gap:14px}h1{font-size:20px}.empty-state{padding:32px 16px}.empty-state h2{font-size:17px}.history-panel summary{padding:16px 14px;flex-wrap:wrap;gap:8px}.panel-body{padding:0 14px 16px}.panel-title{min-width:120px}.tag{font-size:11px;padding:3px 9px}.metric{padding:15px}}@media(prefers-reduced-motion:reduce){.chevron{transition:none}}
+'''
+
+PAGE_JS = '''
+  function updateCountdowns() {
+    document.querySelectorAll('.trip-timer[data-ends]').forEach(function (element) {
+      var remaining = Math.floor((Number(element.dataset.ends) - Date.now()) / 1000);
+      if (!Number.isFinite(remaining)) return;
+      if (remaining <= 0) {
+        element.textContent = 'زمان ثبت‌شدهٔ سفر به پایان رسیده؛ منتظر دریافت بعدی';
+      } else {
+        var minutes = Math.floor(remaining / 60);
+        element.textContent = 'برآورد زمان باقی‌مانده: ' + minutes + ':' + String(remaining % 60).padStart(2, '0');
+      }
+    });
+  }
+  updateCountdowns();
+  setInterval(updateCountdowns, 1000);
+  // Keep each account panel's disclosure state across automatic page refreshes.
+  document.querySelectorAll('details[data-status-panel]').forEach(function (panel) {
+    var key = 'status_panel_open_' + panel.id;
+    try { panel.open = localStorage.getItem(key) === '1'; } catch (e) {}
+    panel.addEventListener('toggle', function () {
+      try { localStorage.setItem(key, panel.open ? '1' : '0'); } catch (e) {}
+    });
+  });
+  // End disclosure persistence.
+'''
 
 
 def render():
-    status = load_json(STATUS_FILE, {})
-    accounts = active_accounts_info()
-    earnings = load_json(EARNINGS_FILE, {})
-    creator_info = creator_status_info()
-    log_errors_map = recent_errors_from_log()
-    meta_date = status.get("_meta", {}).get("date", time.strftime("%Y-%m-%d"))
-    now = datetime.now(tz=TZ).strftime("%Y-%m-%d %H:%M:%S")
-
-    ordered = accounts
-
-    total_trips_today = 0
-    total_checks_today = 0
-    total_errors_today = 0
-    total_cars_on_trip = 0
-    total_cars_idle = 0
-    total_wallet = 0.0
-    account_blocks = []
-
-    for acc in ordered:
-        user = acc.get("username", "?")
-        a = status.get(user, {})
-        ran = a.get("last_run")
-        last_result = a.get("last_result", "")
-        c_today = a.get("checks_today", 0)
-        t_today = a.get("trips_started_today", 0)
-        t_total = a.get("trips_started_total", 0)
-        e_today = a.get("errors_today", 0)
-        cars = a.get("cars", [])
-        on_trip = [c for c in cars if c.get("status") == "on_trip"]
-        idle = [c for c in cars if c.get("status") == "idle"]
-
-        total_trips_today += t_today
-        total_checks_today += c_today
-        total_errors_today += e_today
-        total_cars_on_trip += len(on_trip)
-        total_cars_idle += len(idle)
-        total_wallet += (a.get("wallet", {}) or {}).get("usdt", 0) or 0
-
-        if last_result == "OK":
-            badge = "<span class='pill pill--ok'>✓ OK</span>"
-        elif "FAILED" in last_result:
-            badge = "<span class='pill pill--bad'>✕ FAILED</span>"
-        elif "error" in last_result.lower():
-            badge = "<span class='pill pill--warn'>⚠ ERRORS</span>"
-        else:
-            badge = "<span class='pill pill--off'>尚无数据</span>"
-
-        initial = esc(user[0].upper() if user else "?")
-        cars_html = "".join(car_card(c) for c in cars) if cars else \
-            "<div class='car-card car-card--none'><div class='car-card__name'>尚无 داده تاکسی</div></div>"
-
-        recent_errors = list(a.get("recent_errors", [])) + log_errors_map.get(user, [])
-        recent_errors = recent_errors[:15]
-        if not recent_errors and last_result and last_result != "OK":
-            recent_errors = [{"t": ran or "", "e": last_result, "why": last_result, "level": "error"}]
-
-        if recent_errors:
-            err_html = "".join(
-                "<div class='err'><div class='err__row'><span class='err__icon'>{ic}</span>"
-                "<span class='err__time'>{t}</span><span class='err__msg'>{e}</span>"
-                "<span class='err__caret'>▾</span></div>"
-                "<div class='err__detail'><div class='err__why'><b>📌 دلیل:</b> {why}</div>"
-                "<pre>{e}</pre></div></div>".format(
-                    ic="⚠" if e.get("level") == "warning" else "⛔",
-                    t=esc(fmt_jalali(e.get("t", ""))), e=esc(e.get("e", "")),
-                    why=esc(e.get("why") or e.get("e", "")),
-                )
-                for e in reversed(recent_errors)
-            )
-            errors_section = f"<div class='err-sec'><div class='err-sec__head'>📋 خراهای اخیر — {len(recent_errors)}</div>{err_html}</div>"
-        else:
-            errors_section = ""
-
-        account_blocks.append(f"""
-      <section class="acc">
-        <div class="acc__head">
-          <div class="acc__avatar">{initial}</div>
-          <div class="acc__id"><span class="acc__user">{esc(user)}</span>{badge}</div>
-          <div class="acc__trips-today"><b>{t_today}</b><small>سفرهای امروز</small></div>
-        </div>
-        <div class="acc__stats">
-          <div class="stat"><small>سفرهای کل</small><b>{t_total}</b></div>
-          <div class="stat"><small>checks امروز</small><b>{c_today}</b></div>
-          <div class="stat"><small>خطای امروز</small><b class="{'neg' if e_today else ''}">{e_today}</b></div>
-          <div class="stat"><small>تاکسی در سفر</small><b>{len(on_trip)}</b></div>
-        </div>
-        {account_features(a)}
-        <div class="acc__foot">آخرین اجرای: <b>{esc(fmt_jalali(ran) if ran else '—')}</b> · نتایج: <b>{esc(last_result or '—')}</b></div>
-        <div class="cars">{cars_html}</div>
-        {mission_center(a.get("missions", {}), user)}
-        {referral_center(a.get("referrals", {}), user)}
-        {errors_section}
-      </section>""")
-
-    log_lines = tail_lines(LOG_FILE, 30)
-    log_html = "".join(f"<div class='logline'>{esc(l.rstrip())}</div>" for l in log_lines) or "<div class='logline'>尚无 لاگ</div>"
-
-    # Jalali (Persian solar) display formatting
-    report_date_j = fmt_jalali(meta_date)
-    now_j = fmt_jalali(now)
-
-    return f"""<!DOCTYPE html>
-<html lang="fa" dir="rtl">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="refresh" content="30">
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Crypto Taxi — Dashboard</title>
-<style>
-  :root {{
-    --bg0:#060b16; --bg1:#0a1020; --bg2:#0f1828; --card:#111b2e; --card2:#162238;
-    --card-hi:#1a2842; --txt:#eef3fc; --muted:#94a3c4; --faint:#64748b;
-    --gold:#ffc629; --gold-d:#e8a21c; --green:#34d399; --green-d:#10b981;
-    --blue:#60a5fa; --blue-d:#3b82f6; --orange:#fb923c; --red:#f87171;
-    --violet:#c084fc; --cyan:#22d3ee; --teal:#2dd4bf;
-    --border:#1e2c44; --border-hi:#2a3e5e;
-    --shadow:0 8px 32px rgba(0,0,0,.4);
-    --shadow-lg:0 12px 40px rgba(0,0,0,.5);
-    --radius:16px; --radius-lg:20px; --radius-sm:10px;
-  }}
-  * {{ box-sizing:border-box; margin:0; padding:0; }}
-  html {{ scroll-behavior:smooth; }}
-  body {{
-    font-family:'Vazirmatn','Segoe UI',system-ui,-apple-system,Arial,sans-serif;
-    background:var(--bg0);
-    color:var(--txt); min-height:100vh; line-height:1.6;
-    background-image:
-      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(255,198,41,.08), transparent 70%),
-      radial-gradient(ellipse 60% 50% at 100% 0%, rgba(96,165,250,.08), transparent 60%),
-      radial-gradient(ellipse 60% 50% at 0% 100%, rgba(192,132,252,.06), transparent 60%),
-      linear-gradient(180deg, var(--bg0), var(--bg1) 40%, var(--bg0));
-    background-attachment:fixed;
-  }}
-  ::-webkit-scrollbar {{ width:8px; height:8px; }}
-  ::-webkit-scrollbar-track {{ background:var(--bg1); }}
-  ::-webkit-scrollbar-thumb {{ background:var(--border-hi); border-radius:4px; }}
-  ::-webkit-scrollbar-thumb:hover {{ background:var(--muted); }}
-
-  /* ---- Header ---- */
-  header {{
-    position:sticky; top:0; z-index:100;
-    background:rgba(10,16,32,.85); backdrop-filter:blur(20px);
-    border-bottom:1px solid var(--border);
-    box-shadow:0 4px 24px rgba(0,0,0,.3);
-  }}
-  .header-inner {{
-    display:flex; justify-content:space-between; align-items:center;
-    padding:14px 28px; gap:16px; flex-wrap:wrap; max-width:1400px; margin:0 auto;
-  }}
-  .header-left {{ display:flex; align-items:center; gap:14px; }}
-  .header-logo {{
-    width:48px; height:48px; border-radius:14px; flex:0 0 auto;
-    background:linear-gradient(135deg, var(--gold), var(--gold-d));
-    display:flex; align-items:center; justify-content:center; font-size:26px;
-    box-shadow:0 6px 20px rgba(255,198,41,.3), inset 0 1px 0 rgba(255,255,255,.2);
-  }}
-  h1 {{ font-size:20px; font-weight:700; letter-spacing:.3px; }}
-  h1 .accent {{ color:var(--gold); }}
-  .header-sub {{ font-size:12.5px; color:var(--muted); margin-top:2px; }}
-  .header-right {{ display:flex; align-items:center; gap:18px; flex-wrap:wrap; }}
-  .live-badge {{
-    display:inline-flex; align-items:center; gap:7px;
-    color:var(--green); font-size:13px; font-weight:600;
-    padding:6px 14px; border-radius:999px;
-    background:rgba(52,211,153,.1); border:1px solid rgba(52,211,153,.3);
-  }}
-  .live-badge .dot {{
-    width:8px; height:8px; border-radius:50%; background:var(--green);
-    box-shadow:0 0 10px var(--green); animation:pulse 2s infinite;
-  }}
-  @keyframes pulse {{ 0%,100%{{opacity:1; transform:scale(1)}} 50%{{opacity:.5; transform:scale(1.2)}} }}
-  .header-meta {{ text-align:right; font-size:12.5px; color:var(--muted); line-height:1.7; }}
-  .header-meta b {{ color:var(--txt); font-weight:600; }}
-
-  /* ---- Toolbar ---- */
-  .toolbar {{ padding:18px 28px 0; max-width:1400px; margin:0 auto; }}
-  .clear-btn {{
-    background:linear-gradient(135deg, rgba(248,113,113,.15), rgba(248,113,113,.08));
-    color:var(--red); border:1px solid rgba(248,113,113,.35);
-    border-radius:12px; padding:10px 22px; font-size:13.5px; font-weight:600;
-    cursor:pointer; transition:all .2s; box-shadow:0 4px 14px rgba(248,113,113,.1);
-    display:inline-flex; align-items:center; gap:8px;
-  }}
-  .clear-btn:hover {{
-    background:linear-gradient(135deg, rgba(248,113,113,.25), rgba(248,113,113,.15));
-    box-shadow:0 6px 20px rgba(248,113,113,.2); transform:translateY(-1px);
-  }}
-  .clear-btn:active {{ transform:scale(.97); }}
-  .clear-btn:disabled {{ opacity:.6; cursor:wait; }}
-
-  /* ---- Main ---- */
-  main {{ padding:24px 28px 48px; max-width:1400px; margin:0 auto; }}
-
-  /* ---- Summary cards ---- */
-  .summary {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:28px; }}
-  .sum {{
-    background:linear-gradient(145deg, var(--card), var(--card2));
-    border:1px solid var(--border); border-radius:var(--radius);
-    padding:18px 20px; box-shadow:var(--shadow); position:relative; overflow:hidden;
-    transition:transform .2s, border-color .2s, box-shadow .2s;
-  }}
-  .sum:hover {{ transform:translateY(-3px); border-color:var(--border-hi); box-shadow:var(--shadow-lg); }}
-  .sum::before {{
-    content:''; position:absolute; top:0; left:0; right:0; height:3px;
-    background:var(--accent, var(--gold));
-    opacity:.8;
-  }}
-  .sum::after {{
-    content:''; position:absolute; bottom:-30px; right:-30px;
-    width:80px; height:80px; border-radius:50%;
-    background:var(--accent, var(--gold)); opacity:.05;
-  }}
-  .sum__icon {{ font-size:24px; margin-bottom:8px; }}
-  .sum small {{ color:var(--muted); display:block; margin-bottom:6px; font-size:13px; }}
-  .sum b {{ font-size:28px; font-weight:700; font-variant-numeric:tabular-nums; }}
-  .sum--gold {{ --accent:var(--gold); }} .sum--gold b {{ color:var(--gold); }}
-  .sum--green {{ --accent:var(--green); }} .sum--green b {{ color:var(--green); }}
-  .sum--blue {{ --accent:var(--blue); }} .sum--blue b {{ color:var(--blue); }}
-  .sum--violet {{ --accent:var(--violet); }} .sum--violet b {{ color:var(--violet); }}
-  .sum--red {{ --accent:var(--red); }} .sum--red b {{ color:var(--red); }}
-  .sum--cyan {{ --accent:var(--cyan); }} .sum--cyan b {{ color:var(--cyan); }}
-
-  /* ---- Section title ---- */
-  .section-title {{
-    font-size:14px; font-weight:700; color:var(--muted);
-    letter-spacing:.5px; text-transform:uppercase;
-    border-bottom:1px solid var(--border); padding-bottom:8px;
-    margin:32px 0 16px; display:flex; align-items:center; gap:8px;
-  }}
-  .section-title .icon {{ font-size:18px; }}
-
-  /* ---- Account card ---- */
-  .acc {{
-    background:linear-gradient(150deg, var(--card), #0d1626);
-    border:1px solid var(--border); border-radius:var(--radius-lg);
-    padding:22px 24px; margin-bottom:20px; box-shadow:var(--shadow);
-    animation:fadein .5s ease both; position:relative; overflow:hidden;
-  }}
-  .acc::before {{
-    content:''; position:absolute; top:0; left:0; right:0; height:3px;
-    background:linear-gradient(90deg, var(--gold), var(--blue), var(--violet));
-    opacity:.6;
-  }}
-  @keyframes fadein {{ from{{opacity:0; transform:translateY(12px)}} to{{opacity:1; transform:none}} }}
-  .acc__head {{ display:flex; align-items:center; gap:14px; margin-bottom:16px; }}
-  .acc__avatar {{
-    width:48px; height:48px; border-radius:14px; flex:0 0 auto;
-    background:linear-gradient(135deg, var(--gold), var(--gold-d));
-    color:#1a1205; display:flex; align-items:center; justify-content:center;
-    font-weight:700; font-size:22px;
-    box-shadow:0 6px 18px rgba(255,198,41,.25), inset 0 1px 0 rgba(255,255,255,.2);
-  }}
-  .acc__id {{ flex:1; min-width:0; }}
-  .acc__user {{ font-weight:600; font-size:16px; word-break:break-all; display:block; margin-bottom:5px; }}
-  .acc__trips-today {{ text-align:center; flex:0 0 auto; }}
-  .acc__trips-today b {{ display:block; font-size:28px; color:var(--gold); font-weight:700; }}
-  .acc__trips-today small {{ color:var(--muted); font-size:11px; }}
-
-  /* ---- Stats row ---- */
-  .acc__stats {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px; }}
-  .stat {{
-    background:rgba(255,255,255,.025); border:1px solid var(--border);
-    border-radius:var(--radius-sm); padding:12px 14px; transition:border-color .2s;
-  }}
-  .stat:hover {{ border-color:var(--border-hi); }}
-  .stat small {{ color:var(--muted); display:block; margin-bottom:4px; font-size:12px; }}
-  .stat b {{ font-size:22px; font-weight:700; font-variant-numeric:tabular-nums; }}
-
-  /* ---- Feature tiles ---- */
-  .acc__feats {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin-bottom:14px; }}
-  .feat {{
-    background:rgba(255,255,255,.02); border:1px solid var(--border);
-    border-radius:var(--radius-sm); padding:10px 12px; text-align:center;
-    transition:transform .15s, border-color .2s;
-  }}
-  .feat:hover {{ transform:translateY(-2px); border-color:var(--border-hi); }}
-  .feat span {{ display:block; color:var(--muted); font-size:11px; margin-bottom:4px; }}
-  .feat b {{ font-size:15px; font-weight:700; font-variant-numeric:tabular-nums; }}
-  .feat--gold b {{ color:var(--gold); }}
-  .feat--green b {{ color:var(--green); }}
-  .feat--blue b {{ color:var(--blue); }}
-  .feat--earn {{ background:rgba(245,158,11,.08); border-color:rgba(245,158,11,.25); }}
-  .feat--earn b {{ color:#f59e0b; }}
-  .feat--avg {{ background:rgba(99,102,241,.08); border-color:rgba(99,102,241,.25); }}
-  .feat--avg b {{ color:#818cf8; }}
-
-  /* ---- Footer line ---- */
-  .acc__foot {{ font-size:12.5px; color:var(--muted); border-top:1px solid var(--border); padding-top:12px; margin-bottom:16px; }}
-  .acc__foot b {{ color:var(--txt); font-weight:600; }}
-
-  /* ---- Car cards ---- */
-  .cars {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }}
-  .car-card {{
-    background:linear-gradient(165deg, var(--card2), #13203a);
-    border:1px solid var(--border); border-radius:var(--radius);
-    padding:18px; transition:transform .2s, box-shadow .2s, border-color .2s;
-    position:relative; overflow:hidden;
-  }}
-  .car-card:hover {{ transform:translateY(-4px); box-shadow:var(--shadow-lg); }}
-  .car-card--on_trip {{ border-color:rgba(52,211,153,.4); box-shadow:0 0 20px rgba(52,211,153,.08); }}
-  .car-card--idle {{ border-color:rgba(96,165,250,.4); }}
-  .car-card__top {{ display:flex; align-items:center; gap:12px; }}
-  .taxi-svg {{ width:52px; height:32px; flex:0 0 auto; filter:drop-shadow(0 4px 12px rgba(0,0,0,.4)); }}
-  .car-card__name-wrap {{ flex:1; min-width:0; display:flex; flex-direction:column; gap:7px; align-items:flex-start; }}
-  .car-card__name {{ font-weight:600; font-size:15px; }}
-  .car-card__plate {{ margin-top:12px; font-size:12.5px; color:var(--muted); letter-spacing:.6px; font-family:'Consolas',monospace; }}
-  .pill {{ padding:2px 9px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; display:inline-flex; align-items:center; gap:3px; }}
-  .pill--rent {{ background:rgba(192,132,252,.15); color:var(--violet); }}
-  .pill--own {{ background:rgba(148,163,196,.12); color:var(--muted); }}
-  .pill--trip {{ background:rgba(52,211,153,.15); color:var(--green); }}
-  .pill--ready {{ background:rgba(96,165,250,.15); color:var(--blue); }}
-  .pill--off {{ background:rgba(148,163,196,.1); color:var(--faint); }}
-  .pill--ok {{ background:rgba(52,211,153,.15); color:var(--green); }}
-  .pill--bad {{ background:rgba(248,113,113,.15); color:var(--red); }}
-  .pill--warn {{ background:rgba(251,146,60,.15); color:var(--orange); }}
-
-  /* ---- Trips bar ---- */
-  .trips {{ margin-top:14px; }}
-  .trips__txt {{ font-size:12.5px; color:var(--muted); margin-bottom:7px; }}
-  .trips__txt b {{ color:var(--txt); }}
-  .trips-bar {{ height:6px; border-radius:6px; background:rgba(255,255,255,.06); overflow:hidden; }}
-  .trips-bar.full .trips__fill {{ background:linear-gradient(90deg, var(--gold), var(--gold-d)); }}
-  .trips__fill {{ height:100%; border-radius:6px; background:linear-gradient(90deg, var(--blue), var(--blue-d)); transition:width .5s ease; }}
-  .chip {{ padding:2px 9px; border-radius:999px; font-size:11.5px; font-weight:600; white-space:nowrap; display:inline-flex; align-items:center; gap:3px; }}
-  .chip--bonus {{ background:rgba(52,211,153,.15); color:var(--green); }}
-
-  /* ---- Countdown ---- */
-  .cd {{ margin-top:14px; padding-top:14px; border-top:1px solid var(--border); }}
-  .cd__row {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }}
-  .cd__label {{ color:var(--muted); font-size:13px; }}
-  .cd__val {{ color:var(--gold); font-variant-numeric:tabular-nums; font-size:16px; font-weight:700; }}
-  .cd__track {{ height:7px; border-radius:7px; background:rgba(255,255,255,.06); overflow:hidden; }}
-  .cd__fill {{ height:100%; border-radius:7px; background:linear-gradient(90deg, var(--gold), #fb923c); width:0%; transition:width 1s linear; }}
-  .cd--idle .cd__label {{ color:var(--blue); }}
-
-  /* ---- Errors ---- */
-  .err-sec {{ margin-top:18px; border-top:1px dashed var(--border); padding-top:14px; }}
-  .err-sec__head {{ color:var(--orange); font-size:13.5px; font-weight:600; margin-bottom:10px; display:flex; align-items:center; gap:6px; }}
-  .err {{ margin-bottom:8px; }}
-  .err__row {{
-    display:flex; align-items:center; gap:10px; padding:10px 14px;
-    border:1px solid var(--border); border-radius:var(--radius-sm);
-    background:rgba(248,113,113,.04); cursor:pointer; font-size:13px;
-    transition:background .15s, border-color .15s;
-  }}
-  .err__row:hover {{ background:rgba(248,113,113,.1); border-color:rgba(248,113,113,.3); }}
-  .err__icon {{ flex:0 0 auto; font-size:15px; }}
-  .err__time {{ color:var(--faint); font-variant-numeric:tabular-nums; flex:0 0 auto; font-size:12px; }}
-  .err__msg {{ flex:1; word-break:break-all; }}
-  .err__caret {{ color:var(--muted); transition:transform .2s; }}
-  .err__row:hover .err__caret {{ transform:rotate(90deg); }}
-  .err__detail {{ display:none; margin:-4px 0 8px; border-left:3px solid var(--red); padding:10px 14px; background:rgba(10,16,32,.6); border-radius:0 var(--radius-sm) var(--radius-sm) 0; }}
-  .err__detail.open {{ display:block; animation:fadein .25s ease both; }}
-  .err__why {{ margin-bottom:8px; font-size:13px; color:#fcd9a8; }}
-  .err__detail pre {{ margin:0; white-space:pre-wrap; word-break:break-all; font-family:'Consolas','Courier New',monospace; font-size:12px; color:#fca5a5; }}
-
-  /* ---- Mission / Referral sections ---- */
-  .mission-sec {{ margin-top:14px; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }}
-  .mission-sec__head {{ font-weight:700; font-size:14.5px; color:var(--gold); display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:11px 14px; }}
-  .mission-sec__head--toggle {{ cursor:pointer; user-select:none; background:rgba(255,255,255,.02); transition:background .15s; }}
-  .mission-sec__head--toggle:hover {{ background:rgba(255,198,41,.08); }}
-  .mc-toggle {{ font-size:14px; transition:transform .2s; display:inline-block; }}
-  .mission-sec.open .mc-toggle {{ transform:rotate(180deg); }}
-  .mission-sec__count {{ background:rgba(255,198,41,.15); color:var(--gold); border-radius:999px; padding:2px 10px; font-size:12px; font-weight:600; }}
-  .mission-sec__claimed {{ color:var(--muted); font-size:12px; }}
-  .mission-sec__body {{ display:none; padding:4px 14px 14px; }}
-  .mission-sec.open .mission-sec__body {{ display:block; }}
-  .mission-sec__sub {{ color:var(--muted); font-size:12.5px; margin:6px 0 14px; }}
-  .mission-sec__group {{ color:var(--muted); font-size:12.5px; font-weight:600; margin:14px 0 8px; }}
-  .mission-list {{ display:flex; flex-direction:column; gap:10px; }}
-  .mission {{ background:rgba(255,255,255,.02); border:1px solid var(--border); border-radius:var(--radius-sm); padding:12px 14px; transition:border-color .15s; }}
-  .mission--claimable {{ border-color:rgba(255,198,41,.5); background:rgba(255,198,41,.05); }}
-  .mission--claimed {{ border-color:rgba(52,211,153,.4); }}
-  .mission--done {{ border-color:rgba(52,211,153,.3); }}
-  .mission__top {{ display:flex; justify-content:space-between; align-items:center; gap:10px; }}
-  .mission__title {{ font-weight:600; font-size:14px; }}
-  .mission__note {{ color:var(--blue); font-size:12px; margin-top:6px; }}
-  .mission__reward {{ margin:8px 0; }}
-  .chip--usdt {{ background:rgba(96,165,250,.15); color:var(--blue); }}
-  .chip--cash {{ background:rgba(255,198,41,.15); color:var(--gold); }}
-  .chip--none {{ background:rgba(148,163,196,.1); color:var(--muted); }}
-  .mstatus {{ font-size:12.5px; font-weight:600; white-space:nowrap; }}
-  .mstatus--claimed {{ color:var(--green); }}
-  .mstatus--claim {{ color:var(--gold); }}
-  .mstatus--done {{ color:var(--blue); }}
-  .mission__bar {{ height:6px; border-radius:6px; background:rgba(255,255,255,.06); overflow:hidden; margin-top:6px; }}
-  .mission__fill {{ height:100%; border-radius:6px; background:linear-gradient(90deg, var(--blue), var(--blue-d)); }}
-  .mission--claimable .mission__fill {{ background:linear-gradient(90deg, var(--gold), #fb923c); }}
-  .mission--claimed .mission__fill {{ background:var(--green); }}
-  .mission__progress {{ color:var(--muted); font-size:12px; margin-top:5px; }}
-
-  /* ---- Revenue section ---- */
-  .rev {{ background:linear-gradient(150deg,#0c1830,#0a1426); border:1px solid var(--border); border-radius:var(--radius-lg); margin-bottom:28px; overflow:hidden; box-shadow:var(--shadow); animation:fadein .5s ease both; }}
-  .rev__head {{ background:rgba(96,165,250,.08); border-bottom:1px solid var(--border); padding:14px 22px; display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:15px; color:var(--blue); }}
-  .rev__updated {{ font-size:12px; font-weight:400; color:var(--muted); }}
-  .rev__grid {{ padding:18px 22px; display:grid; grid-template-columns:1fr 1fr; gap:20px; }}
-  .rev__cards {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
-  .rev__card {{ background:rgba(255,255,255,.02); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; }}
-  .rev__card-label {{ font-size:12px; color:var(--muted); margin-bottom:6px; }}
-  .rev__card-val {{ font-size:22px; font-weight:700; color:var(--gold); font-variant-numeric:tabular-nums; }}
-  .rev__card-val small {{ font-size:12px; color:var(--muted); }}
-  .rev__card-sub {{ font-size:11.5px; color:var(--faint); margin-top:3px; }}
-  .rev__card--today {{ border-color:rgba(255,198,41,.3); }}
-  .rev__card--week {{ border-color:rgba(96,165,250,.3); }}
-  .rev__card--week .rev__card-val {{ color:var(--blue); }}
-  .rev__card--month {{ border-color:rgba(52,211,153,.3); }}
-  .rev__card--month .rev__card-val {{ color:var(--green); }}
-  .rev__card--all {{ border-color:rgba(192,132,252,.3); }}
-  .rev__card--all .rev__card-val {{ color:var(--violet); }}
-  .rev__chart {{ background:rgba(255,255,255,.02); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; }}
-  .rev__chart-label {{ font-size:13px; color:var(--muted); margin-bottom:12px; }}
-  .rev-bars {{ display:flex; align-items:flex-end; gap:8px; height:90px; }}
-  .rev-bar-wrap {{ flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; height:100%; }}
-  .rev-bar-label {{ font-size:11px; color:var(--faint); }}
-  .rev-bar-track {{ width:100%; flex:1; background:rgba(255,255,255,.04); border-radius:6px 6px 0 0; display:flex; flex-direction:column; justify-content:flex-end; overflow:hidden; }}
-  .rev-bar-fill {{ width:100%; border-radius:6px 6px 0 0; background:linear-gradient(180deg,var(--gold),#fb923c); min-height:4px; transition:height .8s ease; }}
-  .rev-bar-val {{ font-size:10px; color:var(--muted); }}
-  .rev__detail {{ background:rgba(255,255,255,.02); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; }}
-  .rev__detail-label {{ font-size:13px; color:var(--muted); margin-bottom:10px; }}
-  .rev-table {{ width:100%; border-collapse:collapse; font-size:13px; }}
-  .rev-table th {{ color:var(--muted); font-size:12px; padding:6px 8px; border-bottom:1px solid var(--border); text-align:right; }}
-  .rev-table td {{ padding:6px 8px; border-bottom:1px solid rgba(255,255,255,.03); }}
-  .rev-table tr:last-child td {{ border-bottom:none; }}
-  .rev-table td.num {{ text-align:center; color:var(--gold); font-variant-numeric:tabular-nums; }}
-  .rev-no {{ color:var(--faint); font-size:13px; text-align:center; padding:10px; }}
-
-  /* ---- Log ---- */
-  .log {{ background:#0a101e; border:1px solid var(--border); border-radius:var(--radius); padding:14px 18px; font-family:'Consolas','Courier New',monospace; font-size:12px; max-height:320px; overflow:auto; }}
-  .logline {{ white-space:pre-wrap; word-break:break-all; padding:1px 0; color:#a8b5d0; }}
-  .neg {{ color:var(--red); }}
-
-  /* Native disclosures work with mouse, touch and keyboard, even without JS. */
-  details.status-panel {{ padding:0; }}
-  .status-panel > .status-panel__summary {{
-    padding:20px 28px; margin:0; cursor:pointer; list-style:none;
-    user-select:none; transition:background .15s;
-  }}
-  .status-panel__summary::-webkit-details-marker {{ display:none; }}
-  .status-panel__summary:hover {{ background:rgba(96,165,250,.06); }}
-  .status-panel__summary:focus-visible {{ outline:2px solid var(--blue); outline-offset:-4px; border-radius:var(--radius-lg); }}
-  .status-panel__summary .creator-status__title {{ min-width:120px; }}
-  .status-panel__body {{ padding:0 28px 24px; }}
-  .status-panel__chevron {{
-    display:inline-flex; align-items:center; justify-content:center;
-    width:28px; height:28px; color:var(--muted); font-size:24px;
-    transition:transform .2s; margin-inline-start:auto;
-  }}
-  .status-panel[open] > summary .status-panel__chevron {{ transform:rotate(180deg); }}
-  @media (max-width:600px) {{
-    .status-panel > .status-panel__summary {{ padding:16px; gap:10px; }}
-    .status-panel__body {{ padding:0 16px 16px; }}
-  }}
-  @media (prefers-reduced-motion:reduce) {{
-    .status-panel__chevron {{ transition:none; }}
-  }}
-
-  /* ---- Creator status panel ---- */
-  .creator-status {{
-    background:linear-gradient(150deg, var(--card), #0d1626);
-    border:1px solid var(--border); border-radius:var(--radius-lg);
-    padding:24px 28px; margin-bottom:24px; box-shadow:var(--shadow);
-    position:relative; overflow:hidden;
-  }}
-  .creator-status::before {{
-    content:''; position:absolute; top:0; left:0; right:0; height:3px;
-    background:linear-gradient(90deg, var(--green), var(--gold), var(--blue));
-    opacity:.6;
-  }}
-  .creator-status__head {{ display:flex; align-items:center; gap:14px; margin-bottom:18px; flex-wrap:wrap; }}
-  .creator-status__icon {{
-    width:44px; height:44px; border-radius:12px; flex:0 0 auto;
-    background:linear-gradient(135deg, var(--green), var(--green-d));
-    color:#052e1c; display:flex; align-items:center; justify-content:center;
-    font-size:22px; font-weight:700;
-  }}
-  .creator-status__title {{ font-size:17px; font-weight:600; flex:1; }}
-  .creator-status__badge {{
-    padding:6px 14px; border-radius:999px; font-size:12.5px; font-weight:600;
-    display:inline-flex; align-items:center; gap:6px;
-  }}
-  .creator-status__badge--active {{ background:rgba(52,211,153,.12); color:var(--green); border:1px solid rgba(52,211,153,.3); }}
-  .creator-status__badge--idle {{ background:rgba(96,165,250,.12); color:var(--blue); border:1px solid rgba(96,165,250,.3); }}
-  .creator-status__badge--done {{ background:rgba(255,198,41,.12); color:var(--gold); border:1px solid rgba(255,198,41,.3); }}
-  .creator-phase-badge {{
-    padding:5px 12px; border-radius:8px; font-size:12px; font-weight:600;
-    background:rgba(96,165,250,.1); color:var(--blue);
-    border:1px solid rgba(96,165,250,.25);
-    display:inline-block;
-  }}
-  .creator-stats {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:14px; margin-bottom:16px; }}
-  .creator-stat {{
-    background:rgba(255,255,255,.025); border:1px solid var(--border);
-    border-radius:var(--radius-sm); padding:14px 16px; text-align:center;
-  }}
-  .creator-stat small {{ color:var(--muted); display:block; margin-bottom:6px; font-size:12px; }}
-  .creator-stat b {{ font-size:26px; font-weight:700; font-variant-numeric:tabular-nums; }}
-  .creator-stat--green b {{ color:var(--green); }}
-  .creator-stat--gold b {{ color:var(--gold); }}
-  .creator-stat--blue b {{ color:var(--blue); }}
-  .creator-stat--red b {{ color:var(--red); }}
-  .creator-progress {{ margin-top:16px; }}
-  .creator-progress__bar {{
-    height:10px; border-radius:10px; background:rgba(255,255,255,.06);
-    overflow:hidden; position:relative;
-  }}
-  .creator-progress__fill {{
-    height:100%; border-radius:10px;
-    background:linear-gradient(90deg, var(--green), var(--gold));
-    transition:width .8s ease; position:relative;
-  }}
-  .creator-progress__fill::after {{
-    content:''; position:absolute; inset:0;
-    background:linear-gradient(90deg, transparent, rgba(255,255,255,.2), transparent);
-    animation:shimmer 2s infinite;
-  }}
-  @keyframes shimmer {{ 0%{{transform:translateX(-100%)}} 100%{{transform:translateX(100%)}} }}
-  .creator-progress__txt {{
-    display:flex; justify-content:space-between; margin-top:8px;
-    font-size:12.5px; color:var(--muted);
-  }}
-  .creator-progress__txt b {{ color:var(--txt); font-weight:600; }}
-  .creator-progress__timer {{
-    margin-top:14px; padding:12px 16px; border-radius:var(--radius-sm);
-    background:rgba(96,165,250,.08); border:1px solid rgba(96,165,250,.2);
-    display:flex; justify-content:space-between; align-items:center;
-  }}
-  .creator-progress__timer-label {{ color:var(--muted); font-size:13px; }}
-  .creator-progress__timer-val {{ color:var(--blue); font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; }}
-
-  /* ---- Footer ---- */
-  footer {{ text-align:center; color:var(--faint); font-size:12px; padding:24px; }}
-</style>
-</head>
-<body>
-<header>
-  <div class="header-inner">
-    <div class="header-left">
-      <div class="header-logo">🚕</div>
-      <div>
-        <h1>Crypto Taxi <span class="accent">— Dashboard</span></h1>
-        <div class="header-sub">حالت امن و فقط‌خواندنی · بدون استارت، اجاره یا دریافت جایزهٔ خودکار</div>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="live-badge"><span class="dot"></span> زنده</div>
-      <div class="header-meta">
-        <div>تاریخ گزارش: <b>{esc(report_date_j)}</b></div>
-        <div>آخرین آپ‌دیت: <b>{esc(now_j)}</b></div>
-      </div>
-    </div>
-  </div>
-</header>
-<div class="toolbar">
-  <p>⏸ عملیات خودکار متوقف است. پایش خارجی هم تا فعال‌سازی صریح در تنظیمات خاموش می‌ماند.</p>
-</div>
-<main>
-  <div class="summary">
-    <div class="sum sum--gold"><div class="sum__icon">👤</div><small>تعداد اکانت‌ها</small><b>{len(ordered)}</b></div>
-    <div class="sum sum--green"><div class="sum__icon">🚗</div><small>در حال سفر</small><b>{total_cars_on_trip}</b></div>
-    <div class="sum sum--blue"><div class="sum__icon">🔵</div><small>آماده به استارت</small><b>{total_cars_idle}</b></div>
-    <div class="sum sum--cyan"><div class="sum__icon">🛣</div><small>سفرهای کلیم‌شده امروز</small><b>{total_trips_today}</b></div>
-    <div class="sum sum--violet"><div class="sum__icon">💰</div><small>موجودی کل USDT</small><b>{total_wallet:.4f}</b></div>
-    <div class="sum sum--red"><div class="sum__icon">⚠️</div><small>خطای امروز</small><b class="{'neg' if total_errors_today else ''}">{total_errors_today}</b></div>
-  </div>
-
-  {creator_status_section(creator_info)}
-
-
-
-  {banned_accounts_section()}
-
-  {revenue_section(earnings)}
-
-  {''.join(account_blocks)}
-
-  <div class="section-title"><span class="icon">📋</span> لاگ اخیر (آخرین 30 خط)</div>
-  <div class="log">{log_html}</div>
-</main>
-<footer>Crypto Taxi Claimer · dashboard زنده — تبدیق ۳۰ ثانیه‌ی · اولویت رنت فعال</footer>
-<script>
-  function pad(n) {{ return String(n).padStart(2, '0'); }}
-  function updateCountdowns() {{
-    document.querySelectorAll('.cd[data-ends]').forEach(function (el) {{
-      var ends = parseInt(el.dataset.ends, 10);
-      var started = parseInt(el.dataset.started, 10) || 0;
-      var diff = Math.floor((ends - Date.now()) / 1000);
-      var val = el.querySelector('.cd__val');
-      var fill = el.querySelector('.cd__fill');
-      if (!val) return;
-      if (diff <= 0) {{
-        val.textContent = 'سفر تموم شد — در حال استارت مجدد';
-        val.style.color = '#2ecc71';
-        if (fill) fill.style.width = '100%';
-      }} else {{
-        var m = Math.floor(diff / 60), s = diff % 60;
-        val.textContent = m + ':' + pad(s) + ' دقیقه';
-        val.style.color = '#ffc629';
-        if (fill && started) {{
-          var total = (ends - started) / 1000;
-          if (total > 0) fill.style.width = Math.max(0, Math.min(100, (1 - diff / total) * 100)) + '%';
-        }}
-      }}
-    }});
-  }}
-  updateCountdowns();
-  setInterval(updateCountdowns, 1000);
-
-  // Refresh within 10 seconds when accounts are added or removed/banned.
-  // Use the same filtered active list as the cards and summary count.
-  (function () {{
-    var currentCount = document.querySelectorAll('.acc').length;
-    function checkCount() {{
-      fetch('/count', {{ cache: 'no-store' }})
-        .then(function (r) {{ return r.json(); }})
-        .then(function (j) {{
-          if (j.ok && j.count !== currentCount) {{
-            console.log('Account count changed: ' + currentCount + ' -> ' + j.count + ', reloading...');
-            location.reload();
-          }}
-        }})
-        .catch(function () {{}});
-    }}
-    setInterval(checkCount, 10000);
-
-  }})();
-
-  // click an error row to expand/collapse its full detail
-  document.querySelectorAll('.err__row').forEach(function (el) {{
-    el.addEventListener('click', function () {{
-      var d = el.nextElementSibling;
-      if (d && d.classList.contains('err__detail')) d.classList.toggle('open');
-    }});
-  }});
-  // Keep each account panel's disclosure state across automatic page refreshes.
-  document.querySelectorAll('details[data-status-panel]').forEach(function (panel) {{
-    var key = 'status_panel_open_' + panel.id;
-    try {{ panel.open = localStorage.getItem(key) === '1'; }} catch (e) {{}}
-    panel.addEventListener('toggle', function () {{
-      try {{ localStorage.setItem(key, panel.open ? '1' : '0'); }} catch (e) {{}}
-    }});
-  }});
-
-  // Mission Center collapse/expand — state persists across the 30s refresh.
-  function mcKey(sec) {{
-    var id = sec.id || '';
-    return 'mc_open_' + id;
-  }}
-  document.querySelectorAll('.mission-sec').forEach(function (sec) {{
-    var head = sec.querySelector('.mission-sec__head--toggle');
-    if (!head) return;
-    var key = mcKey(sec);
-    var wasOpen = false;
-    try {{ wasOpen = localStorage.getItem(key) === '1'; }} catch (e) {{}}
-    if (wasOpen) sec.classList.add('open');
-    function toggle() {{
-      sec.classList.toggle('open');
-      var open = sec.classList.contains('open');
-      try {{ localStorage.setItem(key, open ? '1' : '0'); }} catch (e) {{}}
-    }}
-    head.addEventListener('click', toggle);
-    head.addEventListener('keydown', function (e) {{
-      if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); toggle(); }}
-    }});
-  }});
-</script>
-</body>
-</html>"""
+    view = dashboard_view()
+    return f'''<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="30">
+      <title>Crypto Taxi — داشبورد فقط‌خواندنی</title><style>{PAGE_CSS}</style></head><body>
+      <header><div class="wrap header-row"><div class="brand"><span class="brand-icon" aria-hidden="true">🚕</span>
+        <div><h1>Crypto Taxi <span lang="en">Dashboard</span></h1><p>وضعیت اکانت اصلی و اطلاعات ثبت‌شده</p></div></div>
+        <span class="safe-badge">حالت امن · فقط‌خواندنی</span></div></header>
+      <main class="wrap">{status_section(view)}{account_data_section(view)}
+        <section class="history" aria-label="سوابق و رویدادها">{banned_accounts_section()}{events_section()}</section>
+      </main><footer class="wrap">فقط‌خواندنی · عملیات خودکار غیرفعال · بازخوانی صفحه هر ۳۰ ثانیه</footer>
+      <script>{PAGE_JS}</script></body></html>'''
 
 
 class Handler(BaseHTTPRequestHandler):
     def send_json(self, payload, status=200):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(body)
 
     def authorized(self):
-        user = os.environ.get("DASHBOARD_USER", "")
-        password = os.environ.get("DASHBOARD_PASSWORD", "")
+        user = os.environ.get('DASHBOARD_USER', '')
+        password = os.environ.get('DASHBOARD_PASSWORD', '')
         if not user or len(password) < 16:
-            self.send_json({"ok": False, "error": "Configure dashboard access in Railway Variables"}, status=503)
+            self.send_json({'ok': False, 'error': 'Configure dashboard access in Railway Variables'}, status=503)
             return False
         try:
-            scheme, encoded = self.headers.get("Authorization", "").split(" ", 1)
-            if scheme.lower() != "basic":
+            scheme, encoded = self.headers.get('Authorization', '').split(' ', 1)
+            if scheme.lower() != 'basic':
                 raise ValueError()
-            supplied_user, supplied_password = base64.b64decode(encoded, validate=True).decode("utf-8").split(":", 1)
+            supplied_user, supplied_password = base64.b64decode(encoded, validate=True).decode('utf-8').split(':', 1)
             valid_user = hmac.compare_digest(supplied_user.encode(), user.encode())
             valid_password = hmac.compare_digest(supplied_password.encode(), password.encode())
             if valid_user and valid_password:
@@ -1399,50 +415,43 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeError, binascii.Error):
             pass
         self.send_response(401)
-        self.send_header("WWW-Authenticate", 'Basic realm="Private dashboard", charset="UTF-8"')
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", "0")
+        self.send_header('WWW-Authenticate', 'Basic realm="Private dashboard", charset="UTF-8"')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', '0')
         self.end_headers()
         return False
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path == "/healthz":
-            self.send_json({"ok": True})  # Static liveness only; never account/config data.
+        if path == '/healthz':
+            self.send_json({'ok': True})
             return
         if not self.authorized():
             return
         try:
-            if path == "/count":
-                self.send_json({"ok": True, "count": len(active_accounts_info())})
-            elif path == "/creator-status":
-                self.send_json(creator_status_info())
-            elif path in ("/", "/index.html"):
-                body = render().encode("utf-8")
+            if path == '/count':
+                self.send_json({'ok': True, 'count': len(active_accounts_info())})
+            elif path in ('/', '/index.html'):
+                body = render().encode('utf-8')
                 self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
                 self.end_headers()
                 self.wfile.write(body)
             else:
-                self.send_json({"ok": False, "error": "Not found"}, status=404)
+                self.send_json({'ok': False, 'error': 'Not found'}, status=404)
         except Exception:
-            self.send_json({"ok": False, "error": "Unable to read dashboard state"}, status=500)
+            self.send_json({'ok': False, 'error': 'Unable to read dashboard state'}, status=500)
 
     def do_POST(self):
         if self.authorized():
-            self.send_json({"ok": False, "error": "Read-only dashboard"}, status=405)
+            self.send_json({'ok': False, 'error': 'Read-only dashboard'}, status=405)
 
     def log_message(self, fmt, *args):
-        pass  # Do not log query strings, authorization attempts or user input.
+        pass
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     initialize_data()
-    print(f"Dashboard serving on http://0.0.0.0:{PORT}")
-    httpd = HTTPServer(("0.0.0.0", PORT), Handler)
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        httpd.server_close()
+    HTTPServer(('0.0.0.0', PORT), Handler).serve_forever()

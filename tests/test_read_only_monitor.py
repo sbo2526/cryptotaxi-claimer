@@ -85,6 +85,24 @@ class MonitorSafetyTests(unittest.TestCase):
         self.assertNotIn('other', text)
         self.assertEqual(set(json.loads(text)), {'main', '_meta'})
 
+    def test_persisted_snapshot_matches_dashboard_and_missing_balance_is_unknown(self):
+        import dashboard
+        for balance in ({}, {'usdt': 0}, {'usdt': 5}):
+            with self.subTest(balance=balance):
+                self.session.post.return_value = response(payload={
+                    'myCars': [{'name': 'City Taxi', 'canDrive': True}],
+                    'rentedCars': [], 'balances': balance,
+                })
+                self.client.poll()
+                state = json.loads(Path(claimer.STATUS_FILE).read_text())
+                self.assertEqual(state['main']['wallet']['usdt'], balance.get('usdt'))
+                with patch.object(dashboard, 'banned_accounts_info', return_value=[]):
+                    view = dashboard.dashboard_view(state)
+                self.assertIsNotNone(view['sample'])
+                panel = dashboard.account_data_section(view)
+                self.assertIn('City Taxi', panel)
+                self.assertIn('dir="ltr">' + ('—' if not balance else f'{balance["usdt"]:.4f}'), panel)
+
     def test_429_and_retry_after_never_immediately_repeat(self):
         self.session.post.return_value = response(429, headers={'Retry-After': '1200'})
         with self.assertRaises(RetryLater) as result:

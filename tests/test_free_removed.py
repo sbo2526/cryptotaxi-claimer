@@ -26,7 +26,7 @@ class FreeRemovedTests(unittest.TestCase):
         with patch.dict(os.environ, {'PRIMARY_ACCOUNT': 'existing-account'}), patch.object(dashboard, 'load_json', side_effect=load):
             page = dashboard.render()
         self.assertIn('existing-account', page)
-        self.assertIn('ساخت خودکار اکانت‌ها', page)
+        self.assertIn('هنوز اطلاعاتی از اکانت دریافت نشده است.', page)
         self.assertNotIn('FREE', page)
         self.assertFalse(hasattr(dashboard, 'free_status_section'))
 

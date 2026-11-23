@@ -47,6 +47,23 @@ Attach a Railway volume at `/app/data` (writable by UID 10001) if you need state
 and suspension markers to survive redeployments. Nothing in the repository's
 old root-level JSON files is automatically imported into the new application.
 
+### Dashboard display
+
+The top row separates monitoring configuration, the selected primary identity,
+and the **last successful saved receive** (Tehran time). Refreshing the page does
+not change that timestamp. Enabling the opt-in flag alone is not proof that a
+monitor process is running; samples older than ten minutes are labeled stale.
+
+Without a valid primary snapshot, the dashboard shows an explicit Persian empty
+state instead of zero balance/trip cards. Wallet and car information appear only
+from a valid saved snapshot; unknown balance is a dash, not a fabricated zero.
+The creator panel and old reward/claim counters have been removed. Suspension
+history and local persisted events are collapsed by default; the browser remembers
+each panel's open/closed state when storage is available. Events summarize saved
+receives and confirmed suspension records, not a complete execution log. Runtime
+logs remain in Railway. Rendering and the 30-second page refresh never make site
+requests or enable monitoring.
+
 ### Optional read-only monitoring — ONLY after API permission is confirmed
 
 | Variable | Purpose |

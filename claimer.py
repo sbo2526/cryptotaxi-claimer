@@ -193,8 +193,8 @@ class ReadOnlyMonitor:
         snapshot = {
             '_meta': {'monitor_status': 'read_only', 'date': timestamp[:10]},
             self.user: {'last_run': timestamp, 'last_result': 'OK', 'cars': cars,
-                        'wallet': {'usdt': (state.get('balances') or {}).get('usdt', 0),
-                                   'cash': (state.get('balances') or {}).get('efectivo', 0)},
+                        'wallet': {'usdt': (state.get('balances') or {}).get('usdt'),
+                                   'cash': (state.get('balances') or {}).get('efectivo')},
                         'bonus_trips': state.get('bonusTrips', 0),
                         'stats': {'trips': (state.get('stats') or {}).get('trips', 0),
                                   'usdt_earned': (state.get('stats') or {}).get('usdtEarned', 0)}},

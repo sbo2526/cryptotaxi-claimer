@@ -22,8 +22,8 @@ class BannedAccountsPanelTests(unittest.TestCase):
             'detected_at': '2026-11-23 10:00:00',
         }]}):
             page = dashboard.render()
-        for expected in ('اکانت‌های بن‌شده', '0 اکانت بن‌شده', 'removed-account',
-                         'HTTP 403 Forbidden on login', '2026-11-23 10:00:00'):
+        for expected in ('سابقهٔ تعلیق اکانت‌ها', '0 اکانت بن‌شده', 'removed-account',
+                         'HTTP 403 Forbidden on login', dashboard.fmt_jalali('2026-11-23 10:00:00')):
             self.assertIn(expected, page)
         self.assertNotIn('دسترسی به ایمیل‌های اکانت‌ها', page)
         self.assertNotIn('email-status', page)
@@ -66,8 +66,8 @@ class BannedAccountsPanelTests(unittest.TestCase):
                         {'banned': [None, 'bad', {}, {'username': []}, {'username': ''}]}):
             with self.subTest(archive=archive), self.sources(archive, []):
                 panel = dashboard.banned_accounts_section()
-                self.assertIn('0 اکانت بن‌شده', panel)
-                self.assertIn('هیچ اکانت بن‌شده‌ای ثبت نشده است.', panel)
+                self.assertIn('بدون سابقه', panel)
+                self.assertIn('هیچ سابقهٔ تعلیقی ثبت نشده است.', panel)
 
     def test_missing_and_invalid_json_files_show_empty_state(self):
         with tempfile.TemporaryDirectory() as directory:
