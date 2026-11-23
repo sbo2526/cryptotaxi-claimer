@@ -29,7 +29,8 @@ class DashboardAccessTests(unittest.TestCase):
         allowed = patch.object(runtime_config, 'ALLOWED_PRIMARY_ACCOUNT', 'main')
         allowed.start()
         self.addCleanup(allowed.stop)
-        env = patch.dict(os.environ, {'DASHBOARD_USER': 'owner',
+        env = patch.dict(os.environ, {'DASHBOARD_PUBLIC': 'false',
+                                     'DASHBOARD_USER': 'owner',
                                      'DASHBOARD_PASSWORD': 'test-dashboard-pass-123',
                                      'PRIMARY_ACCOUNT': 'main'}, clear=True)
         env.start()
@@ -78,6 +79,57 @@ class DashboardAccessTests(unittest.TestCase):
                 self.assertEqual(self.session.get(self.url + path, timeout=5).status_code, 401)
                 self.assertEqual(self.session.get(self.url + path, auth=auth, timeout=5).status_code, 404)
                 self.assertEqual(self.session.post(self.url + path, auth=auth, json={'listingId': 1}, timeout=5).status_code, 405)
+
+    def test_default_direct_url_needs_no_dashboard_credentials(self):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(dashboard, 'load_json', side_effect=lambda path, default: default):
+            for path in ('/', '/index.html', '/count'):
+                with self.subTest(path=path):
+                    result = self.session.get(self.url + path, timeout=5)
+                    self.assertEqual(result.status_code, 200)
+                    self.assertNotIn('WWW-Authenticate', result.headers)
+                    self.assertEqual(result.headers['Cache-Control'], 'no-store')
+                    self.assertEqual(result.headers['X-Robots-Tag'], 'noindex, nofollow')
+                    self.assertEqual(result.headers['Referrer-Policy'], 'no-referrer')
+                    if path != '/count':
+                        self.assertIn('نمایش عمومی', result.text)
+                        self.assertIn('name="robots" content="noindex, nofollow"', result.text)
+            self.assertFalse(runtime_config.monitoring_enabled())
+            self.assertFalse(runtime_config.auto_start_enabled())
+
+    def test_public_mode_ignores_existing_or_bad_basic_credentials(self):
+        with patch.dict(os.environ, {'DASHBOARD_PUBLIC': 'true'}), \
+             patch.object(dashboard, 'load_json', side_effect=lambda path, default: default):
+            for header in ('Basic invalid', 'Bearer invalid'):
+                result = self.session.get(self.url + '/', headers={'Authorization': header}, timeout=5)
+                self.assertEqual(result.status_code, 200)
+                self.assertNotIn('WWW-Authenticate', result.headers)
+                self.assertNotIn('test-dashboard-pass-123', result.text)
+            with patch.dict(os.environ, {'DASHBOARD_PASSWORD': '', 'DASHBOARD_USER': ''}):
+                self.assertEqual(self.session.get(self.url + '/', timeout=5).status_code, 200)
+
+    def test_public_access_never_adds_game_actions_or_file_routes(self):
+        with patch.dict(os.environ, {'DASHBOARD_PUBLIC': 'true'}):
+            for path in ('/clear', '/trips/start', '/market/rent', '/rentals/enable',
+                         '/status.json', '/.env', '/runtime_config.py'):
+                with self.subTest(path=path):
+                    self.assertEqual(self.session.get(self.url + path, timeout=5).status_code, 404)
+                    self.assertEqual(self.session.post(self.url + path, json={}, timeout=5).status_code, 405)
+            self.assertEqual(self.session.post(self.url + '/', json={}, timeout=5).status_code, 405)
+
+    def test_invalid_public_mode_values_do_not_silently_remove_private_auth(self):
+        for value in ('false', '', '0', 'yes', 'typo'):
+            with self.subTest(value=value), patch.dict(os.environ, {'DASHBOARD_PUBLIC': value}):
+                result = self.session.get(self.url + '/', timeout=5)
+                self.assertEqual(result.status_code, 401)
+        with patch.dict(os.environ, {'DASHBOARD_PUBLIC': ' TRUE '}):
+            self.assertTrue(runtime_config.dashboard_public())
+
+    def test_private_mode_has_no_public_access_notice(self):
+        with patch.object(dashboard, 'load_json', side_effect=lambda path, default: default):
+            result = self.session.get(self.url + '/', auth=('owner', 'test-dashboard-pass-123'), timeout=5)
+        self.assertEqual(result.status_code, 200)
+        self.assertNotIn('نمایش عمومی', result.text)
 
     def test_invalid_authorization_does_not_crash(self):
         for value in ('Basic not-base64', 'Bearer bad', 'Basic ' + base64.b64encode(b'no-colon').decode()):

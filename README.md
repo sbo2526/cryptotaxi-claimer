@@ -1,4 +1,4 @@
-# Crypto Taxi — protected primary-account monitor and optional trip starts
+# Crypto Taxi — primary-account monitor with a direct-access dashboard
 
 ## Safety defaults
 
@@ -65,20 +65,36 @@
 
 ## Railway setup (secrets go in Variables, NEVER chat or Git)
 
-### Required for the dashboard
+### Dashboard access — public by owner request
+
+The dashboard now opens directly by URL **without a username or password by
+default**. `/`, `/index.html` and `/count` are readable without authentication.
+**Anyone who knows or discovers the URL can view the displayed account identity,
+balance, taxis, diagnostics and history.** The address is not a secret access key.
+The page explicitly labels public mode, keeps `Cache-Control: no-store`, and sends
+`X-Robots-Tag: noindex, nofollow` and `Referrer-Policy: no-referrer`; these discourage
+indexing/link leakage but do not make public information private.
 
 | Variable | Purpose |
 |---|---|
-| `DASHBOARD_USER` | Your private dashboard login name |
-| `DASHBOARD_PASSWORD` | Unique randomly generated password, at least 16 characters |
+| `DASHBOARD_PUBLIC` | Defaults to `true` for direct access. Set `false` to restore private Basic authentication. |
+| `DASHBOARD_USER` | Required only in private mode: dashboard login name |
+| `DASHBOARD_PASSWORD` | Required only in private mode: unique password of at least 16 characters |
 | `PRIMARY_ACCOUNT` | Must be exactly `bavafasobhan@gmail.com`; any other identity is rejected |
 | `DATA_DIR` | Writable runtime directory, default `/app/data` in Docker |
 
-The dashboard responds with **503 until its login is configured**; this is
-intentional, rather than exposing account information publicly. Use HTTPS for
-Basic authentication. `/healthz` is an unauthenticated static liveness endpoint;
-set Railway's healthcheck path to `/healthz` if a healthcheck is configured. It
-reveals no account, credential or monitor state.
+Existing `DASHBOARD_USER`/`DASHBOARD_PASSWORD` values do not protect the dashboard
+while public mode is selected (including the new default). To restore protection,
+set `DASHBOARD_PUBLIC=false` with valid credentials and apply/redeploy. Invalid or
+empty explicit public-mode values fall back to private mode, not public access.
+In private mode, missing/weak credentials return **503** and absent/invalid Basic
+auth returns **401**. Use HTTPS for Basic authentication.
+
+This only changes dashboard viewing: all POSTs and game-action routes remain
+unavailable, new rentals stay disabled, and game credentials, monitoring opt-in,
+shared ownership and trip-start policy are unchanged. Public viewing cannot enable
+monitoring or start a taxi. `/healthz` remains an unauthenticated static liveness
+endpoint with no account, credential or monitor state; use it for Railway healthchecks.
 
 Attach a Railway volume at `/app/data` (writable by UID 10001) if you need state
 and suspension markers to survive redeployments. Nothing in the repository's
