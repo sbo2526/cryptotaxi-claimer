@@ -151,6 +151,62 @@ class AutoStartTests(unittest.TestCase):
         self.assertEqual(self.session.post.call_args_list[1].kwargs['json'], {'carId': 2})
         self.assertIsNone(self.journal(1))
 
+    def test_main_ordinary_trip_and_multiple_eligible_rentals_overlap_across_cycles(self):
+        base, elapsed = time.time(), [0]
+        main_trip = {'startedAt': base * 1000, 'endsAt': (base + 3600) * 1000}
+        rental_trip = {'startedAt': (base + 300) * 1000, 'endsAt': (base + 3900) * 1000}
+        second_rental_trip = {'startedAt': (base + 600) * 1000, 'endsAt': (base + 4200) * 1000}
+        ordinary = {'used': 0, 'limit': 10, 'left': 10, 'bonus': 0}
+        own_idle = ready(1, quota=ordinary)
+        own_driving = ready(1, quota=ordinary, trip=main_trip)
+        rental_idle = ready(2, quota=ordinary)
+        rental_driving = ready(2, quota=ordinary, trip=rental_trip)
+        second_idle = ready(4, quota=ordinary)
+        second_driving = ready(4, quota=ordinary, trip=second_rental_trip)
+        blocked = ready(3, canDrive=False, quota=ordinary, block={'code': 'not_your_turn'})
+        after_main = self.state(own=[own_driving], rentals=[rental_idle, blocked, second_idle])
+        after_first_rental = self.state(own=[own_driving], rentals=[rental_driving, blocked, second_idle])
+        self.session.post.side_effect = [
+            response({}), self.state(own=[own_idle], rentals=[rental_idle, blocked, second_idle]),
+            response({'trip': main_trip}), after_main,
+            after_main, response({'trip': rental_trip}), after_first_rental,
+            after_first_rental, response({'trip': second_rental_trip}),
+            self.state(own=[own_driving], rentals=[rental_driving, blocked, second_driving]),
+        ]
+        waits = []
+        def sleep(seconds):
+            waits.append(seconds)
+            if len(waits) == 3:
+                raise KeyboardInterrupt()
+            elapsed[0] += seconds
+        with patch.object(claimer.time, 'time', side_effect=lambda: base + elapsed[0]):
+            with self.assertRaises(KeyboardInterrupt):
+                self.client.run(sleep=sleep)
+        self.assertEqual(waits, [300, 300, 3015])
+        starts = [call.kwargs['json']['carId'] for call in self.session.post.call_args_list
+                  if call.args[0].endswith('/trips/start')]
+        self.assertEqual(starts, [1, 2, 4])  # Main FIRST, then permitted rentals BEFORE it ends.
+        self.assertEqual(self.calls().count('auth/login'), 1)
+        self.assertEqual(self.pacer.wait.call_count, len(self.calls()))
+        for car_id in (1, 2, 4):
+            self.assertEqual(self.journal(car_id)['phase'], 'observed')
+        self.assertIsNone(self.journal(3))
+        cars = json.loads(Path(claimer.STATUS_FILE).read_text())[PRIMARY]['cars']
+        self.assertEqual(sum(car['status'] == 'on_trip' for car in cars), 3)
+        self.assertTrue(all(car['ends_at'] > (base + elapsed[0]) * 1000
+                            for car in cars if car['status'] == 'on_trip'))
+
+    def test_main_trip_does_not_override_rental_turn_or_capacity_restrictions(self):
+        self.session.post.return_value = self.state(own=[ready(trip=self.trip)], rentals=[
+            ready(2, canDrive=False, block={'code': 'not_your_turn'}),
+            ready(3, quota={'left': 0, 'bonus': 0}),
+        ])
+        delay, reason = self.client.poll()
+        self.assertEqual(reason, 'trip_end')
+        self.assertGreater(delay, claimer.MIN_POLL_SECONDS)
+        self.assertEqual(self.calls(), ['state'])
+        self.assertEqual(self.db.rows, {})
+
     def test_disabled_default_remains_read_only_even_when_ready(self):
         with patch.dict(os.environ, {'AUTO_START_TRIPS_ENABLED': ''}):
             self.session.post.return_value = self.state()

@@ -586,7 +586,7 @@ def account_data_section(view):
     if not view['enabled'] or not auto_start_enabled():
         automation_note = 'استارت خودکار خاموش است؛ تاکسی‌های بدون سفر خودکار حرکت نمی‌کنند. برای فعال‌سازی در Railway، SITE_MONITORING_ENABLED=true و AUTO_START_TRIPS_ENABLED=true لازم است؛ تنظیمات ورود و دیتابیس هم باید کامل باشند.'
     else:
-        automation_note = 'اولویت استارت: تاکسی اصلی، سپس تاکسی‌های رنتیِ مجاز با سهمیهٔ معتبر. در هر چرخه حداکثر یک استارت؛ موارد دیگر زودتر از ۵ دقیقه بررسی نمی‌شوند. فعال‌بودن تنظیم، تضمین اجرای فعلی نیست.'
+        automation_note = 'اولویت استارت: تاکسی اصلی، سپس تاکسی‌های رنتیِ مجاز با سهمیهٔ معتبر. رنتی‌های واجد شرایط می‌توانند هم‌زمان با سفر اصلی در سفر باشند؛ منتظر پایان آن نمی‌مانند. در هر چرخه حداکثر یک استارت؛ فاصلهٔ بررسی موارد آماده حداقل ۵ دقیقه است. فعال‌بودن تنظیم، تضمین اجرای فعلی نیست.'
     return f'''<section id="accountData" aria-labelledby="dataTitle">
       <div class="metrics" aria-label="خلاصهٔ حساب">
         <article class="metric wallet-metric">{icon('wallet')}<span>موجودی کیف پول</span><strong dir="ltr">{balance_html} <small>USDT</small></strong><p>موجودیِ آخرین دریافت</p></article>

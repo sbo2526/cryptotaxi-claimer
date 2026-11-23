@@ -114,8 +114,14 @@ unknown start outcome is not mislabeled as not started. The worker saves a safe
 `start_check` reason from the same eligibility rule it uses before starting; idle
 cards explain missing permission/capacity, unknown old data, disabled automation,
 stale samples or a recorded service stop rather than promising a start. Personal
-cars retain priority; existing eligible rentals can also start, at most one per
-cycle with the existing pacing. Renting new cars remains disabled.
+cars retain priority; existing eligible rentals can also start **while the main
+car is on an ordinary or extra trip**. An active main trip is not an account-wide
+start lock. Multiple existing rentals may overlap with it, at most one new start
+per cycle with the existing pacing and a fresh state/confirmation for every start.
+The worker does not wait for the main trip to end when a rental is eligible; the
+next eligible car is considered after at least five minutes. This means overlapping
+trips, not simultaneous HTTP requests. Turn/permission/capacity restrictions and
+unresolved-journal stops still apply. Renting new cars remains disabled.
 Each card keeps quota details and the original site block message in a disclosure;
 the known Spanish not-your-turn message also has a Persian summary. Technical
 status and configuration guidance live in a separate collapsed panel, opened by
