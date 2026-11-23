@@ -71,6 +71,14 @@ class DashboardAccessTests(unittest.TestCase):
         self.assertEqual(self.session.post(self.url + '/clear', auth=auth, json={}, timeout=5).status_code, 405)
         self.assertEqual(self.session.get(self.url + '/clear', auth=auth, timeout=5).status_code, 404)
 
+    def test_new_rental_ui_does_not_add_executable_market_or_rent_routes(self):
+        auth = ('owner', 'test-dashboard-pass-123')
+        for path in ('/rent', '/market', '/market/rent', '/rentals/enable'):
+            with self.subTest(path=path):
+                self.assertEqual(self.session.get(self.url + path, timeout=5).status_code, 401)
+                self.assertEqual(self.session.get(self.url + path, auth=auth, timeout=5).status_code, 404)
+                self.assertEqual(self.session.post(self.url + path, auth=auth, json={'listingId': 1}, timeout=5).status_code, 405)
+
     def test_invalid_authorization_does_not_crash(self):
         for value in ('Basic not-base64', 'Bearer bad', 'Basic ' + base64.b64encode(b'no-colon').decode()):
             result = self.session.get(self.url + '/', headers={'Authorization': value}, timeout=5)

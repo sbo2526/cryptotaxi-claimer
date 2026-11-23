@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from trip_rules import timestamp_ms
+from rental_rules import rental_preview
 from monitor_runtime import read_report
 from ban_detection import is_ban_error, is_confirmed_ban_record
 from runtime_config import (DATA_DIR, primary_username, monitoring_enabled, initialize_data,
@@ -330,6 +331,7 @@ def operation_mode():
 def icon(name, css=''):
     paths = {
         'grid': '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+        'key': '<circle cx="8" cy="8" r="5"/><path d="m12 12 8 8m-4-4 3-3m-6 0 3-3"/>',
         'car': '<path d="m5 8 2-4h10l2 4M4 8h16v10H4zM7 18v2m10-2v2M7 12h1m8 0h1M4 15h16"/>',
         'clock': '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
         'refresh': '<path d="M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 13 2M5 16a8 8 0 0 0 13 2"/>',
@@ -607,6 +609,39 @@ def account_data_section(view):
         <button type="button" data-filter="rented" aria-pressed="false">اجاره‌ای <span>{len(cars) - owned}</span></button></div>
         <p class="data-note">{note}</p></div>
       <div class="taxi-grid">{cards}</div>{filter_empty}</section>'''
+
+
+def rentals_section(view):
+    """Inactive new-rental workspace. Reads only the existing account snapshot."""
+    sample = view['sample']
+    plan = rental_preview(sample['cars'] if sample else None)
+    count = trip_count_text(plan['existing'])
+    slots = trip_count_text(plan['slots'])
+    if plan['existing'] is None:
+        note = 'تعداد رنت‌های فعلی نامشخص است؛ برای محاسبهٔ ظرفیت، دریافت معتبر حساب لازم است.'
+    elif plan['existing'] >= plan['legacy_limit']:
+        note = 'تعداد فعلی به سقف داخلی نسخهٔ قبلی رسیده یا از آن بیشتر است؛ طبق آن قاعده ظرفیت رنت جدید صفر است. رنت‌های موجود حفظ می‌شوند و هیچ لغو یا حذفی انجام نمی‌شود.'
+    else:
+        note = 'ظرفیت نمایش‌داده‌شده فقط محاسبهٔ سقف داخلی نسخهٔ قبلی است؛ مجوز رنت یا نشانهٔ وجود آگهی مناسب نیست.'
+    return f'''<section id="rentals" class="rental-section" aria-labelledby="rentalTitle">
+      <div class="section-heading"><div><span class="eyebrow">بازار و اجارهٔ جدید</span><h2 id="rentalTitle">مدیریت رنت</h2></div>
+        <span class="rental-disabled">{icon('lock')} فعلاً غیرفعال</span></div>
+      <div class="rental-body"><div class="rental-intro"><span class="rental-symbol">{icon('key')}</span><div>
+        <h3>بخش رنت آمادهٔ بررسی است، نه اجرا</h3>
+        <p id="rentalNotice">هیچ درخواست بازار، اجاره یا پرداختی ارسال نمی‌شود. استارت تاکسی‌های از قبل رنت‌شده، با اجارهٔ جدید فرق دارد و طبق تنظیمات استارت ادامه پیدا می‌کند.</p></div></div>
+        <div class="rental-stats">
+          <div><span>رنت‌های فعلی در آخرین دریافت</span><strong data-rental-existing>{count}</strong></div>
+          <div><span>سقف داخلی نسخهٔ قبلی</span><strong>{plan['legacy_limit']} <small>تاکسی</small></strong></div>
+          <div><span>ظرفیت نظری رنت جدید</span><strong data-rental-slots>{slots}</strong></div></div>
+        <p class="rental-note">{esc(note)}</p>
+        <div class="rental-market"><h3>آگهی‌های بازار <span class="tag">بررسی نشده</span></h3>
+          <p>چون این بخش خاموش است، بازار خوانده نشده؛ قیمت، موجودی آگهی، مدت قرارداد، شیفت و سقف سفر مشخص نیست. نبود فهرست به معنی خالی‌بودن بازار نیست.</p></div>
+        <details class="rental-guide"><summary>چه چیزی از پروژهٔ قبلی بازیابی شده؟</summary>
+          <p>قاعدهٔ شمارش رنت‌های فعلی، سقف داخلی ۲ تاکسی و پیش‌نمایش انتخاب آگهی به ترتیب فهرست بازیابی شده‌اند. این سقف، محدودیت تأییدشدهٔ بازی نیست؛ داشتن ۴ رنت باعث حذف آن‌ها نمی‌شود.</p>
+          <p>پیش از فعال‌سازی در آینده، هزینه و شرایط واقعی قرارداد، مجوز API و جلوگیری از اجاره یا پرداخت تکراری باید تأیید شوند. فعلاً هیچ مسیر اجرایی برای اجارهٔ جدید وجود ندارد و تغییر Variables آن را روشن نمی‌کند.</p></details>
+        <div class="rental-actions"><button class="button" type="button" disabled aria-describedby="rentalNotice">{icon('lock')} اجارهٔ جدید غیرفعال است</button>
+          <a class="text-link" href="#taxis">دیدن تاکسی‌های موجود {icon('arrow')}</a></div>
+      </div></section>'''
 
 
 def disclosure(panel_id, title, badge, body, icon):
@@ -955,6 +990,31 @@ h1{font-size:21px;margin-top:4px}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}
 }
 
+
+/* New rentals are an inactive, local-only preview, not a browser action. */
+.rental-section{margin-top:34px;scroll-margin-top:20px}
+.rental-disabled{display:inline-flex;align-items:center;gap:7px;font-size:14px;color:var(--amber);border:1px solid var(--warning-line);background:var(--warning-bg);padding:5px 10px;border-radius:8px;white-space:nowrap}
+.rental-disabled .icon{width:15px;height:15px}
+.rental-body{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:22px}
+.rental-intro{display:flex;align-items:flex-start;gap:13px}
+.rental-symbol{display:grid;place-items:center;flex-shrink:0;background:var(--raised);color:var(--yellow);width:44px;height:44px;border-radius:12px}
+.rental-body h3{font-size:17px;margin:0 0 6px}
+.rental-body p{font-size:15px;color:var(--muted);line-height:1.9;margin:0}
+.rental-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin-top:20px;gap:12px}
+.rental-stats>div{border:1px solid var(--line);background:var(--navy);border-radius:10px;padding:14px;min-width:0}
+.rental-stats span{font-size:14px;color:var(--muted);display:block}
+.rental-stats strong{font-size:24px;display:block;margin-top:5px;color:var(--ink)}
+.rental-stats small{font-size:13px;font-weight:normal;color:var(--muted)}
+.rental-body .rental-note{margin:14px 0 20px;font-size:14px}
+.rental-market{padding:17px;border:1px dashed var(--line);border-radius:10px;background:var(--navy)}
+.rental-market h3{display:flex;align-items:center;gap:10px}
+.rental-guide{margin-top:16px;border-bottom:1px solid var(--line);padding-bottom:16px}
+.rental-guide summary{cursor:pointer;font-size:15px;color:var(--blue)}
+.rental-guide p{margin-top:10px}
+.rental-actions{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:15px;margin-top:18px}
+.rental-actions .button:disabled{cursor:not-allowed;opacity:.8;background:var(--raised);color:var(--muted)}
+@media(max-width:850px){.sidebar{flex-wrap:wrap}.sidebar nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%}.nav-link{justify-content:center}}
+@media(max-width:580px){.sidebar nav{grid-template-columns:repeat(2,minmax(0,1fr))}.rental-stats{grid-template-columns:1fr}.rental-body{padding:16px}.rental-intro{flex-direction:column}.rental-disabled{font-size:12px}.rental-section .section-heading h2{font-size:18px}}
 '''
 
 PAGE_JS = '''
@@ -1026,6 +1086,7 @@ def render():
         <span class="nav-caption">فضای کاری شما</span><nav>
           <a class="nav-link" href="#overview" aria-current="page">{icon('grid')} نمای کلی</a>
           <a class="nav-link" href="#taxis">{icon('car')} تاکسی‌های من</a>
+          <a class="nav-link" href="#rentals">{icon('key')} مدیریت رنت</a>
           <a class="nav-link" href="#history">{icon('history')} سوابق و راهنما</a></nav>
         <div class="sidebar-bottom"><span class="private-label">{icon('lock')} حالت امن · تک‌اکانت</span>
           <p>کلیم و رنت فعلاً غیرفعال‌اند.<br>این صفحه فقط اطلاعات محلی را نمایش می‌دهد.</p></div></aside>
@@ -1035,7 +1096,7 @@ def render():
         <div class="header-actions"><div class="identity"><span class="avatar">{icon('lock')}</span>
           <div><strong>حساب اصلی شما</strong><bdi>{identity}</bdi></div></div>
           <a class="button" href="/">{icon('refresh')} بازخوانی صفحه</a></div></header>
-        {status_section(view)}{account_data_section(view)}
+        {status_section(view)}{account_data_section(view)}{rentals_section(view)}
         <section id="history" class="history" aria-label="سوابق و راهنما"><div class="history-heading">{icon('history')}<h2>سوابق و راهنما</h2><p>جزئیات بیشتر، فقط وقتی به آن‌ها نیاز دارید.</p></div>
           {technical_section(view)}{banned_accounts_section()}{events_section()}</section>
         <footer class="page-footer"><span>{icon('refresh')} بازخوانی صفحه هر ۳۰ ثانیه · بدون درخواست مستقیم به بازی</span><span>زمان‌ها به وقت تهران · کلیم و رنت غیرفعال</span></footer>
