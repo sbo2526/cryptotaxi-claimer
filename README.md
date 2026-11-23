@@ -7,9 +7,9 @@ Automated multi-account claimer for [thecryptotaxi.com](https://thecryptotaxi.co
 | Service | Description |
 |---|---|
 | **Claimer** | Periodically sweeps all accounts — starts trips, claims missions, claims referral trips, and runs the FREE ad visitor |
-| **Account Creator** | Creates new accounts every ~5 minutes, up to 100 (auto-shuts at target) |
+| **Account Creator** | Disabled — automatic account creation is turned off |
 | **Dashboard** | Web dashboard on port 8080 with live stats, countdown timers, and per-account tables |
-| **Referral Faker** | Dormant until main account reaches 100 real referrals, then creates 2-8 level-2 fake accounts per referral |
+| **Referral Faker** | Disabled — automatic referral account creation is turned off |
 | **Supervisor** | Monitors all services, auto-restarts on crash, rotates logs |
 
 ## Quick Start (Railway / Docker)
@@ -33,3 +33,13 @@ docker run -d -p 8080:8080 cryptotaxi
 - `mail_reader.py` — mail.tm verification code reader
 - `ctl.sh` — control script (start/stop/restart/status)
 - `Dockerfile` — container config for Railway/Docker
+
+## Account creation disabled
+
+`ACCOUNT_CREATION_ENABLED = False` in `runtime_config.py` prevents the supervisor
+from starting or restarting both account-creation workers. Their standalone entry
+points also exit without making requests. The dashboard shows them as disabled,
+even if old status files exist. Existing accounts and the claimer are unchanged.
+
+This takes effect on Railway only after the change is merged into `main` and
+successfully deployed. Editing this working branch does not stop existing production workers.

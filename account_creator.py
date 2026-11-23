@@ -22,6 +22,8 @@ Usage:
   python3 account_creator.py --target 50 --interval 300
 """
 
+from runtime_config import ACCOUNT_CREATION_ENABLED
+
 import json
 import os
 import sys
@@ -592,6 +594,10 @@ def countdown_sleep(sleep_time, target_ts, target, current):
 
 
 def main():
+    if not ACCOUNT_CREATION_ENABLED:
+        log.info("Automatic account creation is disabled")
+        return
+
     target = 100
     interval = 300  # 5 minutes
 

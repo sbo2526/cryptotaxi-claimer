@@ -33,6 +33,8 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from runtime_config import ACCOUNT_CREATION_ENABLED
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 TZ = ZoneInfo("Asia/Tehran")
 
@@ -60,6 +62,7 @@ SERVICES = {
     },
     "account_creator": {
         "name": "Account Creator",
+        "enabled": ACCOUNT_CREATION_ENABLED,
         "cmd": ["python3", "account_creator.py", "--target", "100", "--interval", "300"],
         "log": "creator.log",
         "critical": False,  # self-shuts at 100; not restarted if exited cleanly
@@ -75,6 +78,7 @@ SERVICES = {
     },
     "referral_faker": {
         "name": "Referral Faker",
+        "enabled": ACCOUNT_CREATION_ENABLED,
         "cmd": ["python3", "referral_faker.py"],
         "log": "referral_faker.log",
         "critical": False,
@@ -113,6 +117,9 @@ class Service:
 
     def start(self):
         with self._lock:
+            if not self.config.get("enabled", True):
+                log.info("[%s] disabled — not starting", self.config["name"])
+                return
             if self.process and self.process.poll() is None:
                 log.debug("[%s] already running (pid %d)", self.key, self.pid)
                 return
@@ -179,7 +186,8 @@ class Service:
             "restart_count": self.restart_count,
             "last_start": self.last_start.strftime("%Y-%m-%d %H:%M:%S") if self.last_start else None,
             "last_exit": self.last_exit.strftime("%Y-%m-%d %H:%M:%S") if self.last_exit else None,
-            "auto_restart": self.config["auto_restart"],
+            "enabled": self.config.get("enabled", True),
+            "auto_restart": self.config["auto_restart"] and self.config.get("enabled", True),
             "critical": self.config["critical"],
         }
 
@@ -235,6 +243,8 @@ class Supervisor:
                     log.error("Monitor error for %s: %s", svc.key, e)
 
     def _check_service(self, svc):
+        if not svc.config.get("enabled", True):
+            return
         was_running = svc.is_running()
 
         if not was_running:
@@ -306,6 +316,9 @@ class Supervisor:
         # Scan real processes by command-line pattern
         ps_out = sp.run(["ps", "aux"], capture_output=True, text=True).stdout
         for svc in self.services.values():
+            if not svc.config.get("enabled", True):
+                print(f"  {svc.config['name']:<20} DISABLED                            auto-restart: ❌")
+                continue
             cmd_pattern = svc.config["cmd"][1]  # e.g. "claimer.py"
             matching_lines = [l for l in ps_out.split("\n") if cmd_pattern in l and "supervisor.py" not in l and "grep" not in l]
             if matching_lines:
