@@ -35,6 +35,7 @@ STATUS_FILE = os.path.join(HERE, "status.json")
 EARNINGS_FILE = os.path.join(HERE, "earnings.json")
 CREATOR_LOG = os.path.join(HERE, "creator.log")
 CREATOR_STATUS_FILE = os.path.join(HERE, "creator_status.json")
+BANNED_ACCOUNTS_FILE = os.path.join(HERE, "banned_accounts.json")
 REFERRAL_STATUS_FILE = os.path.join(HERE, "referral_faker_status.json")
 LOG_FILE = os.path.join(HERE, "claimer.log")
 
@@ -1095,69 +1096,98 @@ def referral_faker_status_section():
 """
 
 
-def email_status_section():
-    """Build an HTML section showing email access status for all accounts."""
-    accounts = load_json(ACCOUNTS_FILE, [])
-    total = len(accounts)
-    with_pw = sum(1 for a in accounts if a.get("email_password"))
-    without_pw = total - with_pw
+def banned_accounts_info():
+    """Merge recorded bans, including accounts removed from accounts.json.
 
+    The archive is authoritative; explicit BAN flags in status.json fill gaps.
+    Ordinary login/sweep errors alone are not interpreted as bans here.
+    """
+    archive = load_json(BANNED_ACCOUNTS_FILE, {})
+    records = archive.get("banned", []) if isinstance(archive, dict) else []
+    if not isinstance(records, list):
+        records = []
+
+    by_user = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        user = record.get("username")
+        if not isinstance(user, str) or not user.strip():
+            continue
+        detected_at = str(record.get("detected_at") or "")
+        previous = by_user.get(user)
+        if previous is None or detected_at >= previous["detected_at"]:
+            by_user[user] = {
+                "username": user,
+                "reason": str(record.get("reason") or ""),
+                "detected_at": detected_at,
+            }
+
+    status = load_json(STATUS_FILE, {})
+    if isinstance(status, dict):
+        for user, account in status.items():
+            if user == "_meta" or not isinstance(account, dict):
+                continue
+            if account.get("banned") is not True and account.get("last_result") != "BAN":
+                continue
+            if not isinstance(user, str) or not user.strip():
+                continue
+            entry = by_user.setdefault(user, {
+                "username": user, "reason": "", "detected_at": "",
+            })
+            entry["reason"] = entry["reason"] or str(account.get("ban_reason") or "")
+            entry["detected_at"] = entry["detected_at"] or str(account.get("banned_at") or "")
+
+    return sorted(by_user.values(), key=lambda row: (row["detected_at"], row["username"]), reverse=True)
+
+
+def banned_accounts_section():
+    """Show recorded bans without changing accounts or triggering requests."""
+    records = banned_accounts_info()
     rows = []
-    for a in accounts:
-        user = a.get("username", "?")
-        email = a.get("email") or user
-        has_pw = bool(a.get("email_password"))
-        if has_pw:
-            status_badge = "<span style='color:var(--green);font-weight:600'>✅ قابل دسترسی</span>"
-        else:
-            status_badge = "<span style='color:var(--orange);font-weight:600'>⚠️ پسورد ایمیل ذخیره نشده</span>"
+    for record in records:
+        user = esc(record["username"])
+        reason = esc(record["reason"] or "دلیل ثبت نشده")
+        detected_at = esc(record["detected_at"] or "زمان ثبت نشده")
         rows.append(f"""
-        <tr>
-          <td style="font-size:12px">{esc(user)}</td>
-          <td style="font-size:12px;color:var(--muted)">{esc(email)}</td>
-          <td style="text-align:center">{status_badge}</td>
-        </tr>""")
-
-    rows_html = "".join(rows) if rows else "<tr><td colspan='3' style='text-align:center;color:var(--muted)'>ھیچ اکانت‌ی وجود ندارد</td></tr>"
+          <tr>
+            <td style="padding:12px;overflow-wrap:anywhere">{user}</td>
+            <td style="padding:12px;color:var(--red);white-space:nowrap">🚫 بن‌شده</td>
+            <td style="padding:12px;color:var(--muted);min-width:180px;overflow-wrap:anywhere">{reason}</td>
+            <td style="padding:12px;white-space:nowrap"><span dir="ltr">{detected_at}</span></td>
+          </tr>""")
+    rows_html = "".join(rows) if rows else """
+          <tr><td colspan="4" style="padding:24px;text-align:center;color:var(--muted)">
+            هیچ اکانت بن‌شده‌ای ثبت نشده است.
+          </td></tr>"""
 
     return f"""
-  <div class="email-status" style="background:linear-gradient(145deg, var(--card), var(--card2));border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:28px;box-shadow:var(--shadow)">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <div style="font-size:28px">📧</div>
-      <div style="flex:1">
-        <div style="font-size:17px;font-weight:600">دسترسی به ایمیل‌های اکانت‌ها</div>
-        <div style="font-size:12.5px;color:var(--muted);margin-top:2px">در صورت ارسال کد verification از سرور، برنامه خودکار کدی را از ایمیل استخراج و استفاده می‌کند</div>
-      </div>
+  <section class="banned-status creator-status" aria-labelledby="bannedAccountsTitle">
+    <div class="creator-status__head">
+      <div class="creator-status__icon" aria-hidden="true">🚫</div>
+      <h2 id="bannedAccountsTitle" class="creator-status__title" style="margin:0">اکانت‌های بن‌شده</h2>
+      <span class="creator-status__badge" style="color:var(--red);border:1px solid currentColor">
+        {len(records)} اکانت بن‌شده
+      </span>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px">
-      <div style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> کل اکانت‌ها </small>
-        <b style="font-size:22px;font-weight:700">{total}</b>
-      </div>
-      <div style="background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.25);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> قابل دسترسی </small>
-        <b style="font-size:22px;font-weight:700;color:var(--green)">{with_pw}</b>
-      </div>
-      <div style="background:rgba(251,146,60,.08);border:1px solid rgba(251,146,60,.25);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> بدون پسورد ایمیل </small>
-        <b style="font-size:22px;font-weight:700;color:var(--orange)">{without_pw}</b>
-      </div>
-    </div>
-    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;max-height:280px;overflow-y:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+    <p style="color:var(--muted);font-size:13px;line-height:1.9;margin:0 0 16px">
+      بن‌های ثبت‌شده توسط سیستم، شامل اکانت‌های حذف‌شده از فهرست پردازش.
+      خطای ورود به‌تنهایی در این بخش به معنی بن‌شدن نیست.
+    </p>
+    <div style="border:1px solid var(--border);border-radius:10px;overflow:auto;max-height:320px">
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px;text-align:right">
         <thead style="background:var(--card2);position:sticky;top:0">
           <tr>
-            <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted)"> اکانت </th>
-            <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted)"> ایمیل </th>
-            <th style="text-align:center;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted)"> وضعیت دسترسی </th>
+            <th scope="col" style="padding:12px">اکانت</th>
+            <th scope="col" style="padding:12px">وضعیت</th>
+            <th scope="col" style="padding:12px">دلیل ثبت‌شده</th>
+            <th scope="col" style="padding:12px">زمان تشخیص (تهران)</th>
           </tr>
         </thead>
-        <tbody>
-          {rows_html}
-        </tbody>
+        <tbody>{rows_html}</tbody>
       </table>
     </div>
-  </div>"""
+  </section>"""
 
 
 def render():
@@ -1712,7 +1742,7 @@ def render():
   {referral_faker_status_section()}
 
 
-  {email_status_section()}
+  {banned_accounts_section()}
 
   {revenue_section(earnings)}
 
