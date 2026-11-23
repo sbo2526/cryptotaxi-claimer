@@ -318,12 +318,6 @@ AUTO_RENT_ENABLED = True     # set to False if API not available
 RENT_ENDPOINT = "market/rent" # endpoint for renting a car from a listing
 MAX_RENTED_PER_ACCOUNT = 2   # maximum rented cars per account — never exceed this
 
-# ---- FREE section: visit ads, wait, claim USDT ----
-FREE_ENABLED = True           # master toggle for the FREE worker
-FREE_INTERVAL = 120           # seconds between FREE checks (2 minutes)
-FREE_MAX_WAIT = 180           # max seconds to wait for an ad timer (3 min)
-FREE_POLL_INTERVAL = 5        # seconds between polls while waiting for ad timer
-
 # ---- BAN detection + auto-remove config ----
 BAN_DETECTION_ENABLED = True      # master toggle
 BAN_CONSECUTIVE_FAILURES = 5      # consecutive sweep failures before BAN
@@ -938,168 +932,6 @@ def start_auto_rent():
 
 
 # --------------------------------------------------------------------------- #
-# FREE section: visit ads, wait for timer, claim USDT
-# --------------------------------------------------------------------------- #
-def fetch_free_links(session, user):
-    """Fetch available FREE ads/links from the server.
-    Returns parsed JSON with links list, or None on failure."""
-    try:
-        r = session.post(f"{BASE}/free", headers=HEADERS, json={}, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("error"):
-            return None
-        return data
-    except Exception as e:
-        log.warning("[%s] free fetch failed: %s", user, short_err(e))
-        return None
-
-
-def free_start(session, user, link_id):
-    """Start a FREE ad visit. Server begins the timer.
-    Returns the pending data (with endsAt) or None."""
-    try:
-        r = session.post(f"{BASE}/free/start", headers=HEADERS,
-                         json={"linkId": link_id}, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("error"):
-            return None
-        return data
-    except Exception as e:
-        log.warning("[%s] free/start failed for link %s: %s", user, link_id, short_err(e))
-        return None
-
-
-def free_claim(session, user, visit_id):
-    """Claim the reward for a completed FREE ad visit.
-    Returns parsed JSON (with reward) or None."""
-    try:
-        r = session.post(f"{BASE}/free/claim", headers=HEADERS,
-                         json={"visitId": visit_id}, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("error"):
-            return None
-        return data
-    except Exception as e:
-        log.warning("[%s] free/claim failed for visit %s: %s", user, visit_id, short_err(e))
-        return None
-
-
-def process_free_for_account(session, user, status):
-    """Process FREE ads for a single account.
-    1. Fetch available links
-    2. For each unvisited link, start visit + wait for timer + claim
-    Returns dict with stats: links_found, started, claimed, earned."""
-    stats = {"links_found": 0, "started": 0, "claimed": 0, "earned": 0.0}
-
-    data = fetch_free_links(session, user)
-    if not data:
-        return stats
-
-    links = data.get("links", [])
-    stats["links_found"] = len(links)
-    earned_total = data.get("earned", 0)
-    stats["earned_total"] = earned_total
-
-    pending = data.get("pending")
-    # If there's an active pending visit, check if it's done and claim it
-    if pending and pending.get("endsAt"):
-        ends_at = pending["endsAt"] / 1000  # ms to s
-        now = time.time()
-        if now >= ends_at:
-            # Timer is done — claim it
-            res = free_claim(session, user, pending.get("visitId"))
-            if res and res.get("reward"):
-                reward = res.get("reward", 0)
-                stats["claimed"] += 1
-                stats["earned"] += reward
-                log.info("[%s] FREE claim: +%.4f USDT (total earned: %.4f)", user, reward, earned_total + reward)
-            else:
-                log.debug("[%s] FREE: pending timer done but claim failed/empty", user)
-        else:
-            # Still waiting — skip for now
-            remaining = ends_at - now
-            log.debug("[%s] FREE: waiting %.0fs for ad timer", user, remaining)
-            return stats
-    else:
-        # No pending — try to start a new visit on an available link
-        available = [l for l in links if not l.get("done")]
-        if available:
-            # Pick a random available link
-            link = random.choice(available)
-            link_id = link.get("id")
-            if link_id:
-                res = free_start(session, user, link_id)
-                if res and res.get("endsAt"):
-                    stats["started"] += 1
-                    log.info("[%s] FREE: started visit on '%s' — waiting %.0fs (reward: %.4f USDT)",
-                             user, link.get("title", "ad"), (res["endsAt"]/1000 - time.time()),
-                             link.get("reward", 0))
-
-    return stats
-
-
-def _free_worker():
-    """Background worker: periodically processes FREE ads for all accounts.
-    - Checks every FREE_INTERVAL seconds
-    - For each account: fetch links, check pending timers, claim when done
-    - Starts new visits on available ads when no pending
-    """
-    while True:
-        try:
-            if not FREE_ENABLED:
-                time.sleep(FREE_INTERVAL)
-                continue
-
-            accounts = load_accounts()
-            status = load_status()
-            total_claimed = 0
-            total_earned = 0.0
-
-            for acc in accounts:
-                user = acc["username"]
-                session = get_session(user)
-                if not session.cookies:
-                    continue
-
-                try:
-                    stats = process_free_for_account(session, user, status)
-                    if stats["claimed"] > 0:
-                        total_claimed += stats["claimed"]
-                        total_earned += stats["earned"]
-                    # Update status.json with free stats
-                    acc_status = status.setdefault(user, {})
-                    free_data = acc_status.setdefault("free", {})
-                    free_data["last_run"] = datetime.fromtimestamp(time.time(), tz=TZ).strftime("%Y-%m-%d %H:%M:%S")
-                    free_data["links_found"] = stats.get("links_found", 0)
-                    free_data["started"] = stats.get("started", 0)
-                    free_data["claimed"] = stats.get("claimed", 0)
-                    free_data["earned"] = stats.get("earned", 0)
-                    free_data["total_earned"] = free_data.get("total_earned", 0) + stats.get("earned", 0)
-                except Exception as e:
-                    log.warning("[%s] free worker error: %s", user, short_err(e))
-
-            # Persist status so the dashboard sees the FREE data
-            save_status(status)
-
-            if total_claimed > 0:
-                log.info("FREE worker: %d claim(s), %.4f USDT earned this cycle",
-                         total_claimed, total_earned)
-        except Exception as e:
-            log.warning("free worker error: %s", e)
-        time.sleep(FREE_INTERVAL)
-
-
-def start_free_worker():
-    t = threading.Thread(target=_free_worker, daemon=True, name="free-worker")
-    t.start()
-    log.info("FREE worker started (checking every %ds)", FREE_INTERVAL)
-    return t
-
-
-# --------------------------------------------------------------------------- #
 # Referral Center: fetch referral state and auto-claim extra trips
 # --------------------------------------------------------------------------- #
 def fetch_referrals(session, user):
@@ -1617,8 +1449,6 @@ def main():
              poll, workers)
     if AUTO_RENT_ENABLED:
         start_auto_rent()
-    if FREE_ENABLED:
-        start_free_worker()
     while True:
         try:
             run_sweep(workers)

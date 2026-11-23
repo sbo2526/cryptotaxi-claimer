@@ -1095,81 +1095,6 @@ def referral_faker_status_section():
 """
 
 
-def free_status_section():
-    """HTML section showing FREE section status for all accounts."""
-    status = load_json(STATUS_FILE, {})
-    total_claimed = 0
-    total_earned = 0.0
-    accounts_with_free = 0
-    rows = []
-
-    for user, acc in status.items():
-        if user == "_meta":
-            continue
-        free = acc.get("free", {})
-        if not free:
-            continue
-        accounts_with_free += 1
-        claimed = free.get("claimed", 0)
-        earned = free.get("earned", 0)
-        total_claimed += claimed
-        total_earned += earned
-        links = free.get("links_found", 0)
-        last_run = free.get("last_run", "尚无")
-        rows.append(f"""
-        <tr>
-          <td style="font-size:12px">{esc(user)}</td>
-          <td style="text-align:center;font-size:13px">{links}</td>
-          <td style="text-align:center;font-size:13px;color:var(--green)">{claimed}</td>
-          <td style="text-align:center;font-size:13px;color:var(--gold)">{earned:.4f}</td>
-          <td style="font-size:11px;color:var(--muted)">{esc(last_run)}</td>
-        </tr>""")
-
-    rows_html = "".join(rows) if rows else "<tr><td colspan='5' style='text-align:center;color:var(--muted)'>ھیچ داده‌ی FREE وجود ندارد</td></tr>"
-
-    return f"""
-  <div style="background:linear-gradient(145deg, var(--card), var(--card2));border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:28px;box-shadow:var(--shadow)">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <div style="font-size:28px">🎁</div>
-      <div style="flex:1">
-        <div style="font-size:17px;font-weight:600">بخش FREE — بازدید أكلات و دریافت USDT</div>
-        <div style="font-size:12.5px;color:var(--muted);margin-top:2px">هر اكانت به طور خودكار أكلات رایگان را بازدید می‌کند، منتظر timer می‌ماند و جایزه را دریافت می‌کند</div>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:16px">
-      <div style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> اكانت‌های فعال FREE </small>
-        <b style="font-size:22px;font-weight:700">{accounts_with_free}</b>
-      </div>
-      <div style="background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.25);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> دريافت‌های کل </small>
-        <b style="font-size:22px;font-weight:700;color:var(--green)">{total_claimed}</b>
-      </div>
-      <div style="background:rgba(255,198,41,.08);border:1px solid rgba(255,198,41,.25);border-radius:10px;padding:14px;text-align:center">
-        <small style="color:var(--muted);display:block;margin-bottom:6px"> درآمد کل FREE </small>
-        <b style="font-size:22px;font-weight:700;color:var(--gold)">{total_earned:.4f}</b>
-      </div>
-    </div>
-    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;max-height:240px;overflow-y:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
-        <thead style="background:var(--card2);position:sticky;top:0">
-          <tr>
-            <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted)"> اكانت </th>
-            <th style="text-align:center;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted)"> أكلات </th>
-            <th style="text-align:center;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted)"> دریافت‌ها </th>
-            <th style="text-align:center;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted)"> درآمد </th>
-            <th style="text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);color:var(--muted)"> آخرين اجرا </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows_html}
-        </tbody>
-      </table>
-    </div>
-  </div>
-"""
-
-
 def email_status_section():
     """Build an HTML section showing email access status for all accounts."""
     accounts = load_json(ACCOUNTS_FILE, [])
@@ -1786,7 +1711,6 @@ def render():
 
   {referral_faker_status_section()}
 
-  {free_status_section()}
 
   {email_status_section()}
 
