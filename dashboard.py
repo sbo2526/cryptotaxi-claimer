@@ -1032,7 +1032,7 @@ def creator_status_section(info):
 def referral_faker_status_section():
     """HTML section showing referral faker status (dormant/active)."""
     if not ACCOUNT_CREATION_ENABLED:
-        return "<div class='creator-status'>⛔ ساخت خودکار اکانت‌های ریفرال غیرفعال است</div>"
+        return ""
     data = load_json(REFERRAL_STATUS_FILE, {})
     if not data:
         return ""

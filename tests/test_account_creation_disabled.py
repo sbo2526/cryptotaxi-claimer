@@ -31,7 +31,14 @@ class AccountCreationDisabledTests(unittest.TestCase):
             self.assertEqual(info['current'], 2)
             self.assertIsNone(info['next_cycle_ts'])
             self.assertIn('غیرفعال', dashboard.creator_status_section(info))
-            self.assertIn('غیرفعال', dashboard.referral_faker_status_section())
+            self.assertEqual('', dashboard.referral_faker_status_section())
+
+    def test_disabled_referral_message_is_absent_from_dashboard(self):
+        with patch.object(dashboard, 'load_json', side_effect=lambda path, default: default):
+            page = dashboard.render()
+        self.assertNotIn('ساخت خودکار اکانت‌های ریفرال غیرفعال است', page)
+        self.assertIn('ساخت خودکار اکانت‌ها', page)
+        self.assertIn('اکانت‌های بن‌شده', page)
 
     def test_disabled_panel_only_shows_existing_account_count(self):
         panel = dashboard.creator_status_section({
