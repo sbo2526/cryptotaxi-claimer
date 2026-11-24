@@ -254,10 +254,22 @@ class SharedMonitorLock:
     def ensure_no_unresolved_starts(self):
         self.check()
         try:
-            row = self.connection.execute('''SELECT car_key FROM cryptotaxi_trip_starts
-                WHERE monitor_key = %s AND phase IN ('pending', 'confirmed') LIMIT 1''', (self.key,)).fetchone()
+            row = self.connection.execute('''SELECT car_key, phase,
+                EXTRACT(EPOCH FROM (NOW() - attempted_at))
+                FROM cryptotaxi_trip_starts
+                WHERE monitor_key = %s AND phase IN ('pending', 'confirmed')
+                ORDER BY attempted_at, car_key LIMIT 1''', (self.key,)).fetchone()
             if row:
-                raise SafetyStop('Unresolved trip-start journal requires manual review', 'start_unknown')
+                # Fixed vocabulary plus a bounded numeric age only. Never log
+                # account/car identifiers, raw rows or driver exception text.
+                phase = row[1] if row[1] in ('pending', 'confirmed') else 'unknown'
+                try:
+                    age = float(row[2])
+                    age_text = str(int(age)) if math.isfinite(age) and 0 <= age <= 3155760000 else 'unknown'
+                except (TypeError, ValueError, OverflowError):
+                    age_text = 'unknown'
+                raise SafetyStop('Unresolved trip-start journal requires manual review; '
+                                 f'phase={phase}; age_seconds={age_text}', 'start_unknown')
         except SafetyStop:
             raise
         except Exception:
