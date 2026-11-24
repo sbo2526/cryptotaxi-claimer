@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 from runtime_config import monitoring_enabled, primary_username, auto_start_enabled
+from trip_rules import start_block, timestamp_ms
 
 
 class SafetyStop(RuntimeError):
@@ -208,8 +209,8 @@ class SharedMonitorLock:
     def reserve_trip_start(self, car_id):
         """Durable intent BEFORE sending; ambiguous/pending starts never replay.
 
-        Only a previously observed successful trip may begin a new episode,
-        after the caller has freshly verified the car is now idle/allowed.
+        Only a previously resolved successful trip may begin a new episode:
+        exact live-trip observation or confirmed-expired + fresh idle permission.
         """
         self.check()
         try:
@@ -250,6 +251,36 @@ class SharedMonitorLock:
             return bool(row and row[0] == 'observed')
         except Exception:
             raise SafetyStop('Unable to verify trip-start observation', 'start_unknown') from None
+
+    def reconcile_completed_trip(self, car, state_age):
+        """Resolve only a confirmed, expired episode with fresh explicit idle state.
+
+        `observed` also denotes post-end reconciliation, not necessarily a live
+        trip observation. Pending outcomes are never changed by this path.
+        Both local and DB clocks must put the confirmed end 15s in the past.
+        No site requests or start reservations are made here.
+        """
+        self.check()
+        check_policy(self.user, 'trips/start')
+        now_ms = time.time() * 1000
+        if (not auto_start_enabled() or not timestamp_ms(now_ms)
+                or not isinstance(state_age, (int, float)) or isinstance(state_age, bool)
+                or not 0 <= state_age <= 90
+                or not isinstance(car, dict) or 'trip' not in car
+                or start_block(car, now_ms) is not None):
+            return False
+        try:
+            row = self.connection.execute('''UPDATE cryptotaxi_trip_starts
+                SET phase = 'observed'
+                WHERE monitor_key = %s AND car_key = %s AND phase = 'confirmed'
+                AND started_at BETWEEN 946684800000 AND 253402300799000
+                AND ends_at BETWEEN 946684800000 AND 253402300799000
+                AND ends_at > started_at
+                AND ends_at <= LEAST(%s, EXTRACT(EPOCH FROM NOW()) * 1000) - 15000
+                RETURNING phase''', (self.key, str(car['id']), now_ms)).fetchone()
+            return bool(row and row[0] == 'observed')
+        except Exception:
+            raise SafetyStop('Unable to reconcile completed confirmed trip', 'start_unknown') from None
 
     def ensure_no_unresolved_starts(self):
         self.check()

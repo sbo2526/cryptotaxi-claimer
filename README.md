@@ -253,8 +253,16 @@ The worker reuses the same session and shared owner/budget for every request:
 3. Persist an intent in the same PostgreSQL database **before** the single POST.
    The DB user also needs create/use permission for `cryptotaxi_trip_starts`.
 4. Validate the returned trip's start/end timestamps, then read state again with
-   the same request pacing and observe that exact trip. Only then is this episode
-   eligible to be replaced once the server later reports the car idle/allowed.
+   the same request pacing and observe that exact trip. This resolves the episode
+   before a later fresh idle/allowed state can authorize the next one. There is
+   also a narrowly scoped recovery for a confirmed trip missed while active:
+   its valid saved end must be at least 15 seconds in the past on BOTH local and
+   database clocks, and fresh (at most 90-second-old) game state must explicitly
+   contain `trip: null`, driving permission and usable quota for that same car.
+   Only then may `confirmed` become `observed` (resolved). This is post-end
+   reconciliation of a known successful episode, not a retry of its start.
+   Pending/unknown outcomes, missing cars, unknown/missing timers, active trips,
+   missing permission/quota and stale state NEVER qualify.
 5. If another eligible car remains, check again after at least five minutes;
    otherwise use the nearest trip-end schedule. This is not a burst-start loop.
 
