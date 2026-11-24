@@ -265,8 +265,15 @@ and **are not automatically replayed**, including 429/503 on a start; server
 cooldowns are still persisted. A read-side cooldown before dispatch may postpone
 work and cause a new state read, but never reissues a sent start. Confirmed
 suspension still stops all operations. Do not delete journal rows to force retries:
-inspect actual game state and logs first. This is conservative duplicate
-prevention, not an exactly-once API guarantee or a guarantee against bans.
+inspect actual game state and logs first. The unresolved-journal Runtime Log now
+includes `phase=pending` (no durable confirmation) or `phase=confirmed` (response
+confirmed but exact trip not observed), plus `age_seconds` for the oldest intent.
+It never includes account/car IDs or raw database/server text. These diagnostics
+only read the journal; they do not clear it or authorize another start. A pending
+intent is NOT proof that a POST was sent, and an idle car/manual-start denial is
+not proof that an earlier start never executed or has not already finished.
+This is conservative duplicate prevention, not an exactly-once API guarantee or
+a guarantee against bans.
 
 The browser remains a local-data viewer: page refreshes/GETs/POSTs do not dispatch
 starts, and unsupported mutation routes remain disabled. No site credentials or

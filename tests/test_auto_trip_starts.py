@@ -47,12 +47,13 @@ class JournalConnection:
         row = None
         if 'SELECT suspended' in query:
             row = (False,)
-        elif 'EXTRACT' in query:
+        elif 'EXTRACT' in query and 'next_request_at' in query:
             row = (0,)
         elif 'GREATEST(next_request_at' in query:
             self.cooldowns.append(params[0])
-        elif 'SELECT car_key FROM cryptotaxi_trip_starts' in query:
-            row = next(((car_key,) for (key, car_key), value in self.rows.items()
+        elif 'SELECT car_key, phase,' in query:
+            row = next(((car_key, value['phase'], value.get('age', 120))
+                        for (key, car_key), value in self.rows.items()
                         if key == params[0] and value['phase'] in ('pending', 'confirmed')), None)
         elif 'INSERT INTO cryptotaxi_trip_starts' in query:
             key = (params[0], params[1])
@@ -453,6 +454,28 @@ class AutoStartTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 'start_unknown')
         self.assertEqual(self.calls(), ['state'])
         self.assertIsNone(self.journal(2))
+
+    def test_unresolved_diagnostics_distinguish_phase_without_exposing_identity(self):
+        for phase in ('pending', 'confirmed'):
+            self.db.rows[(self.owner.key, 'private-car-id')] = {'phase': phase, 'age': 123.75}
+            with self.assertRaises(SafetyStop) as error:
+                self.owner.ensure_no_unresolved_starts()
+            self.assertEqual(error.exception.code, 'start_unknown')
+            self.assertIn('phase=' + phase, str(error.exception))
+            self.assertIn('age_seconds=123', str(error.exception))
+            self.assertNotIn('private-car-id', str(error.exception))
+            self.assertNotIn(PRIMARY, str(error.exception))
+            self.assertEqual(self.db.rows[(self.owner.key, 'private-car-id')]['phase'], phase)
+        self.session.post.assert_not_called()
+
+    def test_unresolved_diagnostic_values_are_sanitized_and_do_not_clear_journal(self):
+        for age in (None, 'secret-driver-text', -1, float('nan'), float('inf'), 10**400):
+            self.db.rows[(self.owner.key, '1')] = {'phase': 'pending', 'age': age}
+            with self.assertRaises(SafetyStop) as error:
+                self.owner.ensure_no_unresolved_starts()
+            self.assertIn('age_seconds=unknown', str(error.exception))
+            self.assertNotIn('secret-driver-text', str(error.exception))
+            self.assertEqual(self.journal()['phase'], 'pending')
 
     def test_auto_run_reuses_the_one_login_session(self):
         self.session.post.side_effect = [response({}), self.state(), response({'trip': self.trip}),
