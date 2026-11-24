@@ -28,11 +28,12 @@
   database reconnect or automatic worker restart. A still-occupied lock stops
   with `already_running`; connection errors and invalid results stop immediately.
   Once acquired, a lost lock is never reacquired by that worker.
-- No hidden transport retries, redirects, proxy switching or repeated login.
-  Each worker makes **at most one login attempt** and reuses the same in-memory
-  `requests.Session` (including server cookies) for all reads. Session expiry does
-  not trigger an automatic login. Sessions are not saved to disk: an explicitly
-  started new worker needs a new login, subject to the shared request budget.
+- No hidden transport retries, redirects or proxy switching. Startup login may
+  resume after a rate limit or shared-budget deferral, with **at most three login
+  attempts** and a full server/shared cooldown between attempts. A successful
+  login is never repeated; the same in-memory `requests.Session` (including
+  cookies) is reused for all reads. Session expiry/401 does not trigger a login.
+  Sessions are not saved to disk; new workers obey the shared request budget.
 - Requests remain paced at least 60 seconds apart. After a successful shared
   database budget reservation, the local pacer's next slot is aligned to that
   completed reservation (never moved earlier). This prevents database/IPC latency
@@ -51,11 +52,16 @@
   count down locally without site requests. These are conservative application
   defaults, NOT the site's published limits, permission or a guarantee against bans.
 - 429/503 respect numeric or HTTP-date `Retry-After` with at least a 5-minute
-  cooldown, also persisted in the shared database. The worker makes at most two
-  delayed read retries and stops on the third consecutive cooldown; a successful
-  read resets that counter. The same request is not immediately reissued. A
-  deferred/rate-limited login stops without retry. Generic 401/403 stop the worker
-  for manual session/access review, but are NOT recorded as an account ban.
+  cooldown, also persisted in the shared database. After two delayed read
+  retries, the third consecutive cooldown enters a longer recovery wait of
+  **at least 15 minutes**, or the server delay if longer. It then resumes with a
+  fresh state read, without re-login. At most three such recovery waits are
+  allowed without a successful poll (stop on the twelfth consecutive cooldown).
+  A successful poll resets both counters. Startup login has its own limit of
+  three attempts, separated by full server/shared cooldowns. The dashboard shows
+  `cooldown` and the planned next check while waiting, not a permanent stop.
+  This is bounded recovery, not an endless retry-until-start loop. Generic
+  401/403 still stop for manual review and are NOT recorded as an account ban.
   Network failures, redirects, unexpected API errors and malformed state stop
   without retry or re-login; a previous good snapshot is retained as historical
   data. Explicit suspension stops the client immediately, closes the
