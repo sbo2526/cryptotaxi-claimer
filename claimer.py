@@ -350,6 +350,9 @@ class ReadOnlyMonitor:
                             and timestamp_ms(trip.get('startedAt')) and timestamp_ms(trip.get('endsAt'))):
                         if self.ownership.observe_trip_start(car['id'], trip['startedAt'], trip['endsAt']):
                             self._observed_starts.add(str(car['id']))
+                    elif self.ownership.reconcile_completed_trip(
+                            car, time.monotonic() - received_at):
+                        log.info('Confirmed trip reconciled after its saved end and fresh idle permission.')
                 self.ownership.ensure_no_unresolved_starts()
                 ready = [car for car in raw_cars if start_block(car, time.time() * 1000) is None]
                 if allow_start and ready:

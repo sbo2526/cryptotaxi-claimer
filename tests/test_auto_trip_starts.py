@@ -13,7 +13,7 @@ import claimer
 import dashboard
 from monitor_safety import RetryLater, RequestPacer, SafetyStop, SharedMonitorLock, check_policy
 from runtime_config import ALLOWED_PRIMARY_ACCOUNT
-from trip_rules import start_block
+from trip_rules import start_block, timestamp_ms
 
 
 PRIMARY = ALLOWED_PRIMARY_ACCOUNT
@@ -67,6 +67,16 @@ class JournalConnection:
             if old and old['phase'] == 'pending':
                 old.update(phase='confirmed', started=params[0], ends=params[1])
                 row = ('confirmed',)
+        elif "SET phase = 'observed'" in query and 'LEAST' in query:
+            self.reconcile_query = query
+            old = self.rows.get((params[0], params[1]))
+            db_now = getattr(self, 'db_now', params[2])
+            if (old and old['phase'] == 'confirmed'
+                    and timestamp_ms(old.get('started')) and timestamp_ms(old.get('ends'))
+                    and old['ends'] > old['started']
+                    and old['ends'] <= min(params[2], db_now) - 15000):
+                old['phase'] = 'observed'
+                row = ('observed',)
         elif "SET phase = 'observed'" in query:
             old = self.rows.get((params[0], params[1]))
             if (old and old['phase'] in ('confirmed', 'observed')
@@ -454,6 +464,94 @@ class AutoStartTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 'start_unknown')
         self.assertEqual(self.calls(), ['state'])
         self.assertIsNone(self.journal(2))
+
+    def test_expired_confirmed_episode_reconciles_then_starts_new_main_episode(self):
+        now = time.time() * 1000
+        self.db.rows[(self.owner.key, '1')] = {
+            'phase': 'confirmed', 'started': now - 7200000, 'ends': now - 3600000}
+        self.session.post.side_effect = [self.state(rentals=[ready(2)]),
+            response({'trip': self.trip}),
+            self.state(own=[ready(trip=self.trip)], rentals=[ready(2)])]
+        self.assertEqual(self.client.poll(), (300, 'ready_trip'))
+        self.assertEqual(self.calls(), ['state', 'trips/start', 'state'])
+        self.assertEqual(self.session.post.call_args_list[1].kwargs['json'], {'carId': 1})
+        self.assertEqual(self.journal()['phase'], 'observed')
+        self.assertEqual(self.journal()['ends'], self.trip['endsAt'])
+        self.assertIsNone(self.journal(2))
+        self.assertIn('EXTRACT(EPOCH FROM NOW())', self.db.reconcile_query)
+        self.assertIn("phase = 'confirmed'", self.db.reconcile_query)
+
+    def test_expired_confirmed_rental_can_begin_next_episode_when_main_not_eligible(self):
+        now = time.time() * 1000
+        self.db.rows[(self.owner.key, '2')] = {
+            'phase': 'confirmed', 'started': now - 7200000, 'ends': now - 3600000}
+        self.session.post.side_effect = [
+            self.state(own=[ready(canDrive=False)], rentals=[ready(2)]),
+            response({'trip': self.trip}),
+            self.state(own=[ready(canDrive=False)], rentals=[ready(2, trip=self.trip)])]
+        self.client.poll()
+        self.assertEqual(self.session.post.call_args_list[1].kwargs['json'], {'carId': 2})
+        self.assertEqual(self.journal(2)['phase'], 'observed')
+        self.assertIsNone(self.journal(1))
+
+    def test_reconciliation_persistence_failure_is_sanitized_and_fail_closed(self):
+        with patch.object(self.owner, 'check'), \
+             patch.object(self.db, 'execute', side_effect=RuntimeError('secret database details')):
+            with self.assertRaises(SafetyStop) as error:
+                self.owner.reconcile_completed_trip(ready(), 0)
+        self.assertEqual(error.exception.code, 'start_unknown')
+        self.assertNotIn('secret', str(error.exception))
+        self.session.post.assert_not_called()
+
+    def test_expired_pending_is_not_reconciled_even_when_fresh_idle_and_eligible(self):
+        now = time.time() * 1000
+        self.db.rows[(self.owner.key, '1')] = {
+            'phase': 'pending', 'started': now - 7200000, 'ends': now - 3600000}
+        self.session.post.return_value = self.state(rentals=[ready(2)])
+        with self.assertRaises(SafetyStop) as error:
+            self.client.poll()
+        self.assertEqual(error.exception.code, 'start_unknown')
+        self.assertEqual(self.calls(), ['state'])
+        self.assertEqual(self.journal()['phase'], 'pending')
+
+    def test_reconciliation_requires_fresh_explicit_idle_and_permission(self):
+        now = time.time() * 1000
+        invalid_cars = [ready(trip=self.trip), ready(canDrive=False),
+                        ready(quota={'left': 0}), ready(broken=True), ready(id=None),
+                        {k: v for k, v in ready().items() if k != 'trip'}]
+        for car, age in ([(car, 0) for car in invalid_cars] +
+                         [(ready(), age) for age in (-1, 91, float('nan'), True, None)]):
+            self.db.rows[(self.owner.key, '1')] = {
+                'phase': 'confirmed', 'started': now - 7200000, 'ends': now - 3600000}
+            with self.subTest(car=car, age=age):
+                self.assertFalse(self.owner.reconcile_completed_trip(car, age))
+                self.assertEqual(self.journal()['phase'], 'confirmed')
+        self.session.post.assert_not_called()
+
+    def test_reconciliation_rejects_future_ends_invalid_times_and_db_clock_skew(self):
+        now = time.time() * 1000
+        for started, ends in ((now - 1000, now + 3600000), (now - 1000, now - 100),
+                              (None, now - 3600000), (now - 3600000, now - 7200000),
+                              (float('nan'), now - 3600000), (1, 2)):
+            self.db.rows[(self.owner.key, '1')] = {'phase': 'confirmed', 'started': started, 'ends': ends}
+            self.assertFalse(self.owner.reconcile_completed_trip(ready(), 0))
+            self.assertEqual(self.journal()['phase'], 'confirmed')
+        self.db.rows[(self.owner.key, '1')] = {
+            'phase': 'confirmed', 'started': now - 7200000, 'ends': now - 3600000}
+        self.db.db_now = now - 5400000
+        self.assertFalse(self.owner.reconcile_completed_trip(ready(), 0))
+        self.assertEqual(self.journal()['phase'], 'confirmed')
+
+    def test_reconciliation_lock_or_database_failure_never_allows_start(self):
+        self.session.post.return_value = self.state()
+        with patch.object(self.owner, 'reconcile_completed_trip',
+                          side_effect=SafetyStop('Storage unavailable', 'start_unknown')):
+            with self.assertRaises(SafetyStop):
+                self.client.poll()
+        self.assertEqual(self.calls(), ['state'])
+        with patch.object(self.owner, 'check', side_effect=SafetyStop('Lock lost')):
+            with self.assertRaises(SafetyStop):
+                self.owner.reconcile_completed_trip(ready(), 0)
 
     def test_unresolved_diagnostics_distinguish_phase_without_exposing_identity(self):
         for phase in ('pending', 'confirmed'):
