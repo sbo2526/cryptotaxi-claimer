@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in primary-account monitor with separately opted-in automatic trip starts.
-No rent/claim/registration or automatic re-login.
+No rent/claim/registration or re-login after session rejection.
+Startup rate-limit retries are bounded and respect server/shared cooldowns.
 
 External access is OFF by default. Enabling it requires API permission from the
 site, a primary account configured in environment variables and exclusive
@@ -41,6 +42,9 @@ IDLE_POLL_SECONDS = 1800
 MAX_POLL_SECONDS = 21600
 TRIP_SETTLE_SECONDS = 15
 MAX_CONSECUTIVE_COOLDOWNS = 3
+MAX_LOGIN_COOLDOWNS = 3
+MAX_RATE_LIMIT_RESUMES = 3
+RATE_LIMIT_RESUME_SECONDS = 900
 
 
 def next_poll_plan(cars, now=None):
@@ -190,7 +194,8 @@ class ReadOnlyMonitor:
                     raise SafetyStop('Login identity must match the primary account')
                 if self.login_attempted:
                     raise SafetyStop('Login already attempted; manual restart required', 'needs_login')
-                # Even a failed/rate-limited login is never retried in this run.
+                # A successful login is never repeated. Cooldown retries are
+                # bounded and re-armed only by run() after waiting.
                 self.login_attempted = True
             if self.stopped or is_suspended(self.user):
                 raise SafetyStop('Account monitoring is stopped')
@@ -401,32 +406,60 @@ class ReadOnlyMonitor:
             atomic_save_json(STATUS_FILE, state)
 
     def run(self, sleep=None):
-        """One login attempt, same Session for all reads, bounded cooldowns."""
+        """Bounded login retries after server cooldowns; same Session for reads."""
         sleep = time.sleep if sleep is None else sleep
         stop_code = 'manual_review'
         try:
             self.publish_activity('starting')
-            write_report('logging_in')
-            self.login()
+            login_cooldowns = 0
+            while True:
+                write_report('logging_in')
+                try:
+                    self.login()
+                    break
+                except RetryLater as cooldown:
+                    login_cooldowns += 1
+                    if login_cooldowns >= MAX_LOGIN_COOLDOWNS:
+                        raise SafetyStop('Login repeatedly rate-limited; worker stopped for manual review',
+                                         'rate_limited') from None
+                    self.publish_activity('cooldown', seconds=cooldown.seconds)
+                    write_report('cooldown')
+                    sleep(cooldown.seconds)
+                    # Re-arm exactly one bounded retry after the server cooldown.
+                    self.login_attempted = False
             write_report('waiting_first_read')
             cooldowns = 0
+            resumes = 0
             while True:
                 try:
                     delay, reason = self.poll()
                 except RetryLater as cooldown:
                     cooldowns += 1
                     if cooldowns >= MAX_CONSECUTIVE_COOLDOWNS:
-                        raise SafetyStop('Repeated cooldowns; worker stopped for manual review', 'rate_limited')
+                        if resumes >= MAX_RATE_LIMIT_RESUMES:
+                            raise SafetyStop('Repeated cooldowns; worker stopped for manual review',
+                                             'rate_limited') from None
+                        # Do not stop forever on a temporary limit: wait a
+                        # bounded resume interval and try a fresh state read.
+                        resumes += 1
+                        cooldowns = 0
+                        delay = max(cooldown.seconds, RATE_LIMIT_RESUME_SECONDS)
+                        self.publish_activity('cooldown', seconds=delay)
+                        write_report('cooldown')
+                        sleep(delay)
+                        continue
                     self.publish_activity('cooldown', seconds=cooldown.seconds)
                     write_report('cooldown')
                     sleep(cooldown.seconds)
                 else:
                     cooldowns = 0
+                    resumes = 0
                     self.publish_activity('waiting', seconds=delay, reason=reason)
                     write_report('waiting')
                     sleep(delay)
         except RetryLater:
-            # Only the one startup login can reach here: never retry it.
+            # Defensive: login/poll cooldowns are handled above. Any escaped
+            # cooldown still stops safely instead of looping.
             stop_code = 'rate_limited'
             raise SafetyStop('Login deferred or rate-limited; manual review required', stop_code) from None
         except SafetyStop as error:

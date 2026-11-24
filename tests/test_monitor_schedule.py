@@ -189,19 +189,50 @@ class MonitorLoopTests(unittest.TestCase):
                 self.assertEqual(self.state()['_meta']['monitor_status'], 'stopped')
                 wait.assert_not_called()
 
-    def test_login_rate_limit_never_retries_but_persists_shared_cooldown(self):
+    def test_login_rate_limit_retries_are_bounded_and_persist_shared_cooldown(self):
         self.session.post.return_value = response(429, headers={'Retry-After': '1200'})
         wait = Mock()
         with self.assertRaises(SafetyStop) as error:
             self.client.run(sleep=wait)
         self.assertEqual(error.exception.code, 'rate_limited')
-        self.assertEqual(self.endpoints(), ['auth/login'])
-        self.owner.cooldown.assert_called_once_with(1200)
-        wait.assert_not_called()
+        self.assertEqual(self.endpoints(), ['auth/login'] * 3)
+        self.assertEqual(self.owner.cooldown.call_count, 3)
+        self.assertTrue(all(call.args == (1200,) for call in self.owner.cooldown.call_args_list))
+        self.assertEqual([call.args[0] for call in wait.call_args_list], [1200, 1200])
         self.assertEqual(self.state()['_meta']['stop_code'], 'rate_limited')
 
+    def test_login_resumes_after_cooldown_and_uses_same_session(self):
+        self.session.post.side_effect = [response(429, headers={'Retry-After': '1200'}),
+                                        response(), response(payload={'myCars': []})]
+        waits = []
+        def wait(seconds):
+            waits.append(seconds)
+            meta = self.state()['_meta']
+            if len(waits) == 1:
+                self.assertEqual(self.endpoints(), ['auth/login'])
+                self.assertEqual(meta['monitor_status'], 'cooldown')
+                self.assertTrue(self.client.login_attempted)
+                self.assertIn('next_check_at', meta)
+                self.assertFalse(self.client.stopped)
+            else:
+                self.assertEqual(meta['monitor_status'], 'waiting')
+                raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.client.run(sleep=wait)
+        self.assertEqual(waits, [1200, 1800])
+        self.assertEqual(self.endpoints(), ['auth/login', 'auth/login', 'state'])
+
+    def test_login_retry_denial_stops_without_another_attempt(self):
+        self.session.post.side_effect = [response(503), response(401)]
+        wait = Mock()
+        with self.assertRaises(SafetyStop) as error:
+            self.client.run(sleep=wait)
+        self.assertEqual(error.exception.code, 'needs_login')
+        self.assertEqual(self.endpoints(), ['auth/login', 'auth/login'])
+        wait.assert_called_once_with(300)
+
     def test_repeated_rate_limits_are_bounded_and_never_shorten_retry_after(self):
-        self.session.post.side_effect = [response()] + [response(429, headers={'Retry-After': '1200'})] * 3
+        self.session.post.side_effect = [response()] + [response(429, headers={'Retry-After': '1200'})] * 12
         waits = []
         def wait(seconds):
             waits.append(seconds)
@@ -210,17 +241,38 @@ class MonitorLoopTests(unittest.TestCase):
             self.assertIn('next_check_at', meta)
         with self.assertRaises(SafetyStop):
             self.client.run(sleep=wait)
-        self.assertEqual(waits, [1200, 1200])
-        self.assertEqual(self.endpoints(), ['auth/login'] + ['state'] * 3)
-        self.assertEqual(self.owner.cooldown.call_count, 3)
+        self.assertEqual(waits, [1200] * 11)
+        self.assertEqual(self.endpoints(), ['auth/login'] + ['state'] * 12)
+        self.assertEqual(self.owner.cooldown.call_count, 12)
         self.assertEqual(self.state()['_meta']['stop_code'], 'rate_limited')
 
-    def test_success_resets_consecutive_cooldown_budget(self):
-        self.session.post.side_effect = [response(), response(503), response(503),
-                                        response(payload={'myCars': []}), response(503), response(503), response(503)]
-        with self.assertRaises(SafetyStop):
-            self.client.run(sleep=Mock())
-        self.assertEqual(self.endpoints(), ['auth/login'] + ['state'] * 6)
+    def test_reads_resume_without_relogin_and_success_resets_cooldown_budget(self):
+        self.session.post.side_effect = ([response()] +
+            ([response(503)] * 3 + [response(payload={'myCars': []})]) * 5)
+        waits = []
+        def wait(seconds):
+            waits.append(seconds)
+            if seconds == 900:
+                self.assertEqual(self.state()['_meta']['monitor_status'], 'cooldown')
+            if waits.count(1800) == 5:
+                raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.client.run(sleep=wait)
+        self.assertEqual(waits, [300, 300, 900, 1800] * 5)
+        self.assertEqual(self.endpoints(), ['auth/login'] + ['state'] * 20)
+
+    def test_recovery_wait_rechecks_ownership_before_any_further_site_request(self):
+        self.session.post.side_effect = [response()] + [response(503)] * 3
+        waits = []
+        def wait(seconds):
+            waits.append(seconds)
+            if seconds == 900:
+                self.owner.check.side_effect = SafetyStop('Lock lost', 'safety_unavailable')
+        with self.assertRaises(SafetyStop) as error:
+            self.client.run(sleep=wait)
+        self.assertEqual(error.exception.code, 'safety_unavailable')
+        self.assertEqual(waits, [300, 300, 900])
+        self.assertEqual(self.endpoints(), ['auth/login'] + ['state'] * 3)
 
     def test_shared_request_budget_can_only_delay_a_scheduled_read(self):
         self.session.post.side_effect = [response(), response(payload={'myCars': []}), response(401)]

@@ -143,6 +143,38 @@ class AutoStartTests(unittest.TestCase):
         self.assertEqual(snapshot[PRIMARY]['cars'][0]['status'], 'on_trip')
         self.assertEqual(self.pacer.wait.call_count, 3)
 
+    def test_rate_limit_recovery_starts_main_then_rental_and_saves_trip_timers(self):
+        # Offline end-to-end loop: three rate-limited reads, recovery, then
+        # verified starts over separate cycles. No restart/re-login or replay.
+        after_main = self.state(own=[ready(trip=self.trip)], rentals=[ready(2)])
+        self.session.post.side_effect = [
+            response({}), response({}, 429), response({}, 429), response({}, 429),
+            self.state(rentals=[ready(2)]), response({'trip': self.trip}), after_main,
+            after_main, response({'trip': self.trip}),
+            self.state(own=[ready(trip=self.trip)], rentals=[ready(2, trip=self.trip)]),
+        ]
+        waits = []
+        def sleep(seconds):
+            waits.append(seconds)
+            if len(waits) <= 3:
+                self.assertEqual(self.calls().count('trips/start'), 0)
+                self.assertEqual(json.loads(Path(claimer.STATUS_FILE).read_text())
+                                 ['_meta']['monitor_status'], 'cooldown')
+            if len(waits) == 5:
+                raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.client.run(sleep=sleep)
+        self.assertEqual(waits[:4], [300, 300, 900, 300])
+        self.assertEqual(self.calls().count('auth/login'), 1)
+        starts = [call.kwargs['json']['carId'] for call in self.session.post.call_args_list
+                  if call.args[0].endswith('/trips/start')]
+        self.assertEqual(starts, [1, 2])
+        for car_id in (1, 2):
+            self.assertEqual(self.journal(car_id)['phase'], 'observed')
+        saved = json.loads(Path(claimer.STATUS_FILE).read_text())[PRIMARY]['cars']
+        self.assertTrue(all(car['ends_at'] == self.trip['endsAt'] for car in saved))
+        self.assertTrue(all(car['status'] == 'on_trip' for car in saved))
+
     def test_rental_is_considered_only_when_no_owned_car_is_eligible(self):
         self.session.post.side_effect = [self.state(own=[ready(canDrive=False)], rentals=[ready(2)]),
                                          response({'trip': self.trip}),
